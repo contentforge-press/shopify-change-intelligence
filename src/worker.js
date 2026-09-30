@@ -1219,6 +1219,172 @@ function renderContact() {
 <p>If you believe the service is being used to infringe rights or process data improperly, email us with details and we will investigate promptly.</p>`);
 }
 
+// ---- Subscription plans ---------------------------------------------------
+const PLANS = {
+    pro: {
+        id: 'pro', name: 'Pro', price: 99, days: 30, tagline: 'For brands & sellers that watch competitors closely',
+        features: [
+            'Track up to 25 competitor stores',
+            'Change alerts (price, stock, new/removed products)',
+            'Weekly competitor digest dashboard',
+            'All paid MCP tools included (changes / intel / batch)',
+            'Email + webhook notifications',
+        ],
+    },
+    business: {
+        id: 'business', name: 'Business', price: 499, days: 30, tagline: 'For agencies & multi-brand teams',
+        features: [
+            'Track up to 150 competitor stores',
+            'Up to 10 team seats',
+            'Higher API & batch limits',
+            'Strategic landscape reports included',
+            'Priority support',
+        ],
+    },
+    enterprise: {
+        id: 'enterprise', name: 'Enterprise', price: 2000, days: 30, tagline: 'For large brands & investors',
+        features: [
+            'Unlimited tracked stores & seats',
+            'Custom verticals & private data feeds',
+            'Dedicated strategic landscape reports',
+            'SLA & personal onboarding',
+            'SSO & advanced access controls',
+        ],
+    },
+};
+
+function renderPricing() {
+    const cards = Object.values(PLANS).map((p, i) => `
+  <div class="plan${i === 1 ? ' hl' : ''}">
+    ${i === 1 ? '<div class="pop">Most popular</div>' : ''}
+    <div class="pname">${p.name}</div>
+    <div class="price"><span class="amt">$${p.price}</span><span class="per">/month</span></div>
+    <div class="tag">${p.tagline}</div>
+    <ul>${p.features.map(f => `<li>${f}</li>`).join('')}</ul>
+    <button class="cta" data-plan="${p.id}">Choose ${p.name}</button>
+  </div>`).join('');
+
+    return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pricing · Shopify Change Intelligence</title>
+<style>
+:root{--bg:#0b0e14;--card:#141925;--line:#222a3a;--fg:#e8ecf4;--mut:#8b95a7;--acc:#5b8cff}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg)}
+.wrap{max-width:1080px;margin:0 auto;padding:48px 20px}
+h1{font-size:30px;margin:0 0 6px;text-align:center}
+.sub{color:var(--mut);text-align:center;margin-bottom:34px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;align-items:stretch}
+.plan{position:relative;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:26px 22px;display:flex;flex-direction:column}
+.plan.hl{border-color:var(--acc);box-shadow:0 0 0 1px var(--acc),0 18px 50px -20px rgba(91,140,255,.5)}
+.pop{position:absolute;top:-11px;left:50%;transform:translateX(-50%);background:var(--acc);color:#fff;font-size:11px;font-weight:600;letter-spacing:.04em;padding:4px 12px;border-radius:999px;text-transform:uppercase}
+.pname{font-size:14px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em}
+.price{margin:8px 0 2px}.amt{font-size:40px;font-weight:700}.per{color:var(--mut);font-size:14px}
+.tag{color:#aab4c6;font-size:13.5px;min-height:40px;margin-bottom:14px}
+ul{list-style:none;padding:0;margin:0 0 20px;flex:1}
+li{padding:8px 0 8px 26px;position:relative;color:#c6cdda;font-size:14px;border-bottom:1px solid rgba(255,255,255,.04)}
+li:before{content:"✓";position:absolute;left:0;color:var(--acc);font-weight:700}
+.cta{margin-top:auto;width:100%;padding:12px;border-radius:10px;border:1px solid var(--acc);background:transparent;color:#cdd9ff;font-size:15px;font-weight:600;cursor:pointer}
+.plan.hl .cta{background:var(--acc);color:#fff}
+.foot{margin-top:30px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;display:none}
+.foot.show{display:block}
+.foot h3{margin:0 0 8px;font-size:15px}
+pre{background:#0d1119;border:1px solid var(--line);border-radius:10px;padding:12px;overflow:auto;font-size:12.5px;color:#cdd6e6;white-space:pre-wrap;word-break:break-all}
+.note{color:var(--mut);font-size:13px;margin-top:26px;text-align:center}
+a{color:#9db8ff}
+@media(max-width:860px){.grid{grid-template-columns:1fr}}
+</style></head>
+<body><div class="wrap">
+<h1>Plans &amp; pricing</h1>
+<div class="sub">Start free with pay-per-result, or get continuous monitoring. Billed in <b>USDC on Base</b> — no card, no processor.</div>
+<div class="grid">${cards}</div>
+<div class="foot" id="paybox">
+  <h3 id="paytitle">Complete your subscription</h3>
+  <p class="note" style="text-align:left;margin:0 0 10px">Pay from any x402-compatible wallet/agent, or simply ask your AI assistant to run the payment request below. After payment your access key appears here instantly.</p>
+  <pre id="payjson">Loading…</pre>
+</div>
+<p class="note">Need only a few calls? <a href="/">Pay per result</a> instead · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · <a href="/contact">Contact</a></p>
+</div>
+<script>
+document.querySelectorAll('.cta').forEach(b=>b.addEventListener('click',async()=>{
+  const box=document.getElementById('paybox'); box.classList.add('show');
+  document.getElementById('paytitle').textContent='Setting up '+b.dataset.plan+'…';
+  document.getElementById('payjson').textContent='Loading…';
+  try{
+    const r=await fetch('/v1/subscribe?plan='+b.dataset.plan,{method:'POST'});
+    const j=await r.json();
+    if(r.status===402){
+      const req=j.accepts[0];
+      document.getElementById('paytitle').textContent='Pay '+(Number(req.maxAmountRequired)/1e6).toFixed(2)+' USDC on Base';
+      document.getElementById('payjson').textContent=JSON.stringify(j,null,2);
+    }else if(j.accessKey){
+      document.getElementById('paytitle').textContent='✓ Subscription active';
+      document.getElementById('payjson').textContent='Access key: '+j.accessKey+'\\nPlan: '+j.plan+'\\nValid until: '+j.expiresAt+'\\n\\nSave this key. Use it at your dashboard.';
+    }else{
+      document.getElementById('payjson').textContent=JSON.stringify(j,null,2);
+    }
+  }catch(e){document.getElementById('payjson').textContent='Error: '+e;}
+}));
+</script>
+</body></html>`;
+}
+
+function newAccessKey() {
+    const bytes = new Uint8Array(24);
+    crypto.getRandomValues(bytes);
+    return 'sci_' + Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function handleSubscribe(url, request, env) {
+    const planId = url.searchParams.get('plan');
+    const plan = PLANS[planId];
+    if (!plan) return json({ error: 'invalid_plan', plans: Object.keys(PLANS) }, 400);
+
+    const resource = `${new URL(url).origin}/v1/subscribe?plan=${planId}`;
+    const requirements = buildRequirements(resource, plan.price, `Shopify Change Intelligence ${plan.name} subscription (${plan.days} days)`);
+
+    const paymentHeader = request.headers.get('PAYMENT') || request.headers.get('X-PAYMENT');
+    if (!paymentHeader) return paymentRequired(requirements);
+
+    let settlement;
+    try {
+        settlement = await verifyAndSettle(paymentHeader, requirements);
+    } catch (err) {
+        return json({ error: 'unexpected_verify_error', detail: String(err?.message || err) }, 502);
+    }
+    if (!settlement.ok) return json({ x402Version: 1, error: settlement.reason }, 402);
+
+    const now = Date.now();
+    const expiresAt = new Date(now + plan.days * 86400_000).toISOString();
+    const accessKey = newAccessKey();
+    const record = {
+        accessKey,
+        plan: plan.id,
+        payer: settlement.payer,
+        startedAt: new Date(now).toISOString(),
+        expiresAt,
+        transaction: settlement.transaction,
+        priceUsd: plan.price,
+    };
+
+    const kv = env.INTEL_KV;
+    if (kv) {
+        await kv.put(`sub-${accessKey}`, JSON.stringify(record));
+        await kv.put(`subpayer-${settlement.payer}`, accessKey);
+    }
+
+    return json({
+        ok: true,
+        accessKey,
+        plan: plan.id,
+        payer: settlement.payer,
+        startedAt: record.startedAt,
+        expiresAt,
+        transaction: settlement.transaction,
+    });
+}
+
 function renderEmbed() {
     const snippet = '<div class="sci-widget" data-store="allbirds.com"></div>\n<script async src="https://shopify-intel.contentforge-press.workers.dev/widget.js"><\/script>';
     return `<!doctype html>
@@ -1375,6 +1541,8 @@ async function handle(request, env) {
         if (pathname === '/privacy') return renderPrivacy();
         if (pathname === '/terms') return renderTerms();
         if (pathname === '/contact') return renderContact();
+        if (pathname === '/pricing') return new Response(renderPricing(), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+        if (pathname === '/v1/subscribe') return handleSubscribe(url, request, env);
         if (pathname === '/mcp') return handleMcp(request, env);
         if (pathname === '/robots.txt') return new Response(ROBOTS_TXT, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
         if (pathname === '/llms.txt') return new Response(LLMS_TXT, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
