@@ -1375,7 +1375,7 @@ async function createDirectOrder(plan, kv) {
     return order;
 }
 
-async function checkDirectOrder(order, kv) {
+async function checkDirectOrder(order, kv, skv) {
     if (order.status === 'paid') return order;
     if (new Date(order.expiresAt).getTime() < Date.now()) { order.status = 'expired'; return order; }
     const found = await findDirectPayment(order.amountUnits);
@@ -1385,7 +1385,7 @@ async function checkDirectOrder(order, kv) {
     const expiresAt = new Date(Date.now() + plan.days * 86400e3).toISOString();
     const accessKey = newAccessKey();
     order.accessKey = accessKey;
-    if (kv) await kv.put(`sub-${accessKey}`, JSON.stringify({ accessKey, plan: plan.id, payer: found.from || '', startedAt: new Date().toISOString(), expiresAt, priceUsd: plan.price, source: 'direct', orderId: order.orderId }));
+    if (kv) await (skv || kv).put(`sub-${accessKey}`, JSON.stringify({ accessKey, plan: plan.id, payer: found.from || '', startedAt: new Date().toISOString(), expiresAt, priceUsd: plan.price, source: 'direct', orderId: order.orderId }));
     if (kv) await kv.put(`order-${order.orderId}`, JSON.stringify(order));
     return order;
 }
@@ -1423,8 +1423,9 @@ async function handleSubscribe(url, request, env) {
     };
 
     const kv = env.INTEL_KV;
+    const shared = env.SHARED_KV || kv;
     if (kv) {
-        await kv.put(`sub-${accessKey}`, JSON.stringify(record));
+        await shared.put(`sub-${accessKey}`, JSON.stringify(record));
         await kv.put(`subpayer-${settlement.payer}`, accessKey);
     }
 
@@ -1442,9 +1443,9 @@ async function handleSubscribe(url, request, env) {
 // ---- Dashboard & watchlist ------------------------------------------------
 const PLAN_STORE_LIMITS = { pro: 25, business: 150, enterprise: 100000 };
 
-async function loadSubscription(kv, accessKey) {
-    if (!kv || !accessKey) return null;
-    const raw = await kv.get(`sub-${accessKey}`);
+async function loadSubscription(kv, accessKey, skv) {
+    if (!accessKey) return null;
+    const raw = await (skv || kv)?.get(`sub-${accessKey}`);
     if (!raw) return null;
     const sub = JSON.parse(raw);
     sub.active = new Date(sub.expiresAt).getTime() > Date.now();
@@ -1619,8 +1620,8 @@ function saveSettings(){
 </body></html>`;
 }
 
-async function watchView(kv, accessKey) {
-    const sub = await loadSubscription(kv, accessKey);
+async function watchView(kv, accessKey, skv) {
+    const sub = await loadSubscription(kv, accessKey, skv);
     if (!sub) return { error: 'invalid_key', status: 401 };
     const wl = await getWatchlist(kv, accessKey);
     return {
@@ -1638,7 +1639,7 @@ async function watchView(kv, accessKey) {
 
 async function handleWatchGet(url, request, env) {
     const key = url.searchParams.get('key');
-    const view = await watchView(env.INTEL_KV, key);
+    const view = await watchView(env.INTEL_KV, key, env.SHARED_KV);
     return json(view, view.status || 200);
 }
 
@@ -1648,8 +1649,9 @@ async function readJsonBody(request) {
 
 async function handleWatchAdd(url, request, env) {
     const kv = env.INTEL_KV;
+    const skv = env.SHARED_KV || kv;
     const key = url.searchParams.get('key');
-    const sub = await loadSubscription(kv, key);
+    const sub = await loadSubscription(kv, key, skv);
     if (!sub) return json({ error: 'invalid_key' }, 401);
     if (!sub.active) return json({ error: 'subscription_expired', hint: 'renew at /pricing' }, 402);
 
@@ -1665,13 +1667,14 @@ async function handleWatchAdd(url, request, env) {
     wl.stores.push({ store, addedAt: new Date().toISOString(), lastChecked: null, lastChanges: [] });
     wl.updatedAt = new Date().toISOString();
     await kv.put(`watch-${key}`, JSON.stringify(wl));
-    return json(await watchView(kv, key));
+    return json(await watchView(kv, key, skv));
 }
 
 async function handleWatchRemove(url, request, env) {
     const kv = env.INTEL_KV;
+    const skv = env.SHARED_KV || kv;
     const key = url.searchParams.get('key');
-    const sub = await loadSubscription(kv, key);
+    const sub = await loadSubscription(kv, key, skv);
     if (!sub) return json({ error: 'invalid_key' }, 401);
     const body = await readJsonBody(request);
     const store = safeNorm(body.store);
@@ -1679,13 +1682,14 @@ async function handleWatchRemove(url, request, env) {
     wl.stores = wl.stores.filter(s => s.store !== store);
     wl.updatedAt = new Date().toISOString();
     await kv.put(`watch-${key}`, JSON.stringify(wl));
-    return json(await watchView(kv, key));
+    return json(await watchView(kv, key, skv));
 }
 
 async function handleWatchSettings(url, request, env) {
     const kv = env.INTEL_KV;
+    const skv = env.SHARED_KV || kv;
     const key = url.searchParams.get('key');
-    const sub = await loadSubscription(kv, key);
+    const sub = await loadSubscription(kv, key, skv);
     if (!sub) return json({ error: 'invalid_key' }, 401);
     const body = await readJsonBody(request);
     const webhookUrl = typeof body.webhookUrl === 'string' ? body.webhookUrl.trim().slice(0, 500) : '';
@@ -1697,7 +1701,7 @@ async function handleWatchSettings(url, request, env) {
     wl.alertEmail = alertEmail;
     wl.updatedAt = new Date().toISOString();
     await kv.put(`watch-${key}`, JSON.stringify(wl));
-    return json(await watchView(kv, key));
+    return json(await watchView(kv, key, skv));
 }
 
 async function checkStore(store) {
@@ -1811,8 +1815,9 @@ ${lines}
 
 async function handleWatchRefresh(url, request, env) {
     const kv = env.INTEL_KV;
+    const skv = env.SHARED_KV || kv;
     const key = url.searchParams.get('key');
-    const sub = await loadSubscription(kv, key);
+    const sub = await loadSubscription(kv, key, skv);
     if (!sub) return json({ error: 'invalid_key' }, 401);
     if (!sub.active) return json({ error: 'subscription_expired', hint: 'renew at /pricing' }, 402);
 
@@ -1820,12 +1825,13 @@ async function handleWatchRefresh(url, request, env) {
     const onlyStore = safeNorm(url.searchParams.get('store'));
     await runWatchlistRefresh(kv, wl, onlyStore ? [onlyStore] : null);
     await kv.put(`watch-${key}`, JSON.stringify(wl));
-    return json(await watchView(kv, key));
+    return json(await watchView(kv, key, skv));
 }
 
 // ---- Scheduled auto-refresh (Cloudflare Cron) -----------------------------
 async function scheduledScan(env) {
     const kv = env.INTEL_KV;
+    const skv = env.SHARED_KV || kv;
     let cursor;
     let scanned = 0;
     let refreshed = 0;
@@ -1837,7 +1843,7 @@ async function scheduledScan(env) {
             if (!accessKey.startsWith('sci_')) continue;
             scanned++;
             try {
-                const sub = await loadSubscription(kv, accessKey);
+                const sub = await loadSubscription(kv, accessKey, skv);
                 if (!sub || !sub.active) continue;
                 const wl = await getWatchlist(kv, accessKey);
                 if (!wl.stores.length) continue;
@@ -1985,6 +1991,7 @@ export default {
 async function handle(request, env) {
     const url = new URL(request.url);
     const { pathname } = url;
+    const skv = env.SHARED_KV || env.INTEL_KV;
 
     if (pathname === '/') return renderHome();
         if (pathname === '/v1') {
@@ -2026,7 +2033,7 @@ async function handle(request, env) {
             const id = url.searchParams.get('id');
             const raw = id && env.INTEL_KV ? await env.INTEL_KV.get(`order-${id}`) : null;
             if (!raw) return json({ error: 'order_not_found' }, 404);
-            return json(await checkDirectOrder(JSON.parse(raw), env.INTEL_KV));
+            return json(await checkDirectOrder(JSON.parse(raw), env.INTEL_KV, skv));
         }
         if (pathname === '/dashboard') return new Response(renderDashboard(), { headers: { 'content-type': 'text/html; charset=utf-8' } });
         if (pathname === '/v1/watch') return handleWatchGet(url, request, env);
