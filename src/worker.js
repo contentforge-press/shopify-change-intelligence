@@ -964,7 +964,7 @@ async function handleMcp(request, env) {
                 },
                 {
                     name: 'shopify_batch_watch',
-                    description: `PAID ($0.03 USDC per store on Base via x402, max ${BATCH_MAX_STORES}). Watch a whole set of competitor Shopify stores in one call; returns per-store change counts (new/removed/price/stock).`,
+                    description: `PAID ($0.03 USDC per store on Base via x402, max ${BATCH_MAX_STORES}). Monitor a whole set of competitor Shopify stores in one call; per-store change counts (new/removed/price/stock). Use for tracking many rivals, category-wide price monitoring, brand/agency portfolio surveillance, market-scanning at scale.`,
                     inputSchema: {
                         type: 'object',
                         properties: { stores: { type: 'array', items: { type: 'string' }, description: 'Shopify domains, e.g. ["allbirds.com","gymshark.com"]' } },
@@ -1316,23 +1316,26 @@ a{color:#9db8ff}
 <p class="note">Need only a few calls? <a href="/">Pay per result</a> instead · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · <a href="/contact">Contact</a></p>
 </div>
 <script>
+let payTimer=null;
 document.querySelectorAll('.cta').forEach(b=>b.addEventListener('click',async()=>{
   const box=document.getElementById('paybox'); box.classList.add('show');
   document.getElementById('paytitle').textContent='Setting up '+b.dataset.plan+'…';
   document.getElementById('payjson').textContent='Loading…';
+  clearInterval(payTimer);
   try{
-    const r=await fetch('/v1/subscribe?plan='+b.dataset.plan,{method:'POST'});
-    const j=await r.json();
-    if(r.status===402){
-      const req=j.accepts[0];
-      document.getElementById('paytitle').textContent='Pay '+(Number(req.maxAmountRequired)/1e6).toFixed(2)+' USDC on Base';
-      document.getElementById('payjson').textContent=JSON.stringify(j,null,2);
-    }else if(j.accessKey){
-      document.getElementById('paytitle').textContent='✓ Subscription active';
-      document.getElementById('payjson').textContent='Access key: '+j.accessKey+'\\nPlan: '+j.plan+'\\nValid until: '+j.expiresAt+'\\n\\nSave this key. Use it at your dashboard.';
-    }else{
-      document.getElementById('payjson').textContent=JSON.stringify(j,null,2);
-    }
+    const r=await fetch('/v1/order?plan='+b.dataset.plan);
+    const o=await r.json();
+    if(o.error){document.getElementById('payjson').textContent=o.error;return;}
+    document.getElementById('paytitle').textContent='Send exactly '+o.amountUsd+' USDC on Base';
+    document.getElementById('payjson').textContent='To: '+o.payTo+'\\nNetwork: Base (ERC-20)\\nExact amount: '+o.amountUsd+' USDC\\n\\nSend from any exchange/wallet. Order expires in 60 min. Waiting for confirmation…';
+    payTimer=setInterval(async()=>{
+      const c=await (await fetch('/v1/order/check?id='+o.orderId)).json();
+      if(c.status==='paid'){
+        clearInterval(payTimer);
+        document.getElementById('paytitle').textContent='✓ Payment confirmed';
+        document.getElementById('payjson').textContent='Access key: '+c.accessKey+'\\nPlan: '+c.plan+'\\nSave this key and use it at your dashboard.';
+      }else if(c.status==='expired'){clearInterval(payTimer);document.getElementById('payjson').textContent='Order expired. Please start again.';}
+    },6000);
   }catch(e){document.getElementById('payjson').textContent='Error: '+e;}
 }));
 </script>
@@ -1343,6 +1346,48 @@ function newAccessKey() {
     const bytes = new Uint8Array(24);
     crypto.getRandomValues(bytes);
     return 'sci_' + Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// ---- Human direct-pay（真人直接链上付USDC，唯一金额识别，Base RPC核验）----
+async function findDirectPayment(expectUnits, windowBlocks = 1900) {
+    const body = { jsonrpc: '2.0', id: 1, method: 'eth_blockNumber', params: [] };
+    const hb = await (await fetch('https://mainnet.base.org', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })).json();
+    const head = parseInt(hb.result, 16);
+    const fromBlock = '0x' + Math.max(0, head - windowBlocks).toString(16);
+    const padded = PAY_TO.slice(2).toLowerCase().padStart(64, '0');
+    const req = { jsonrpc: '2.0', id: 2, method: 'eth_getLogs', params: [{ address: USDC_BASE, fromBlock, toBlock: 'latest', topics: ['0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', null, '0x' + padded] }] };
+    const lr = await (await fetch('https://mainnet.base.org', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(req) })).json();
+    if (!Array.isArray(lr.result)) return null;
+    for (const log of lr.result) if (log.data && BigInt(log.data) === BigInt(expectUnits)) {
+        return { tx: log.transactionHash, from: '0x' + (log.topics[1] || '').slice(26) };
+    }
+    return null;
+}
+
+async function createDirectOrder(plan, kv) {
+    const salt = crypto.getRandomValues(new Uint8Array(2));
+    const extra = ((salt[0] << 8 | salt[1]) % 900 + 100);
+    const amountUsd = +(plan.price + extra / 1_000_000).toFixed(6);
+    const bytes = new Uint8Array(16); crypto.getRandomValues(bytes);
+    const orderId = 'ord_' + Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    const order = { orderId, plan: plan.id, planName: plan.name, amountUsd, amountUnits: String(Math.round(amountUsd * 1e6)), payTo: PAY_TO, network: 'base', asset: USDC_BASE, status: 'awaiting', createdAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60 * 60e3).toISOString() };
+    if (kv) await kv.put(`order-${orderId}`, JSON.stringify(order), { expirationTtl: 5400 });
+    return order;
+}
+
+async function checkDirectOrder(order, kv) {
+    if (order.status === 'paid') return order;
+    if (new Date(order.expiresAt).getTime() < Date.now()) { order.status = 'expired'; return order; }
+    const found = await findDirectPayment(order.amountUnits);
+    if (!found) return order;
+    order.status = 'paid'; order.tx = found.tx; order.payer = found.from; order.paidAt = new Date().toISOString();
+    const plan = PLANS[order.plan];
+    const expiresAt = new Date(Date.now() + plan.days * 86400e3).toISOString();
+    const accessKey = newAccessKey();
+    order.accessKey = accessKey;
+    if (kv) await kv.put(`sub-${accessKey}`, JSON.stringify({ accessKey, plan: plan.id, payer: found.from || '', startedAt: new Date().toISOString(), expiresAt, priceUsd: plan.price, source: 'direct', orderId: order.orderId }));
+    if (kv) await kv.put(`order-${order.orderId}`, JSON.stringify(order));
+    return order;
 }
 
 async function handleSubscribe(url, request, env) {
@@ -1972,6 +2017,17 @@ async function handle(request, env) {
         if (pathname === '/contact') return renderContact();
         if (pathname === '/pricing') return new Response(renderPricing(), { headers: { 'content-type': 'text/html; charset=utf-8' } });
         if (pathname === '/v1/subscribe') return handleSubscribe(url, request, env);
+        if (pathname === '/v1/order') {
+            const plan = PLANS[url.searchParams.get('plan')];
+            if (!plan) return json({ error: 'invalid_plan', plans: Object.keys(PLANS) }, 400);
+            return json(await createDirectOrder(plan, env.INTEL_KV));
+        }
+        if (pathname === '/v1/order/check') {
+            const id = url.searchParams.get('id');
+            const raw = id && env.INTEL_KV ? await env.INTEL_KV.get(`order-${id}`) : null;
+            if (!raw) return json({ error: 'order_not_found' }, 404);
+            return json(await checkDirectOrder(JSON.parse(raw), env.INTEL_KV));
+        }
         if (pathname === '/dashboard') return new Response(renderDashboard(), { headers: { 'content-type': 'text/html; charset=utf-8' } });
         if (pathname === '/v1/watch') return handleWatchGet(url, request, env);
         if (pathname === '/v1/watch/add') return handleWatchAdd(url, request, env);
