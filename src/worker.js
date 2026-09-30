@@ -122,10 +122,51 @@ async function run(){
     return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
 }
 
-const normDomain = (raw) => String(raw ?? '')
-    .trim().toLowerCase()
-    .replace(/^https?:\/\//, '')
-    .replace(/[\/?#].*$/, '');
+// Normalize, then strictly validate a public hostname. Throws on anything
+// that could be used for SSRF: raw IPs, loopback/link-local/private ranges,
+// credentials, non-standard ports, or malformed labels.
+function normDomain(raw) {
+    const s = String(raw ?? '').trim().toLowerCase().replace(/^https?:\/\//, '').replace(/[\/?#].*$/, '');
+    if (!s) throw new Error('empty_domain');
+    if (s.includes('@')) throw new Error('credentials_not_allowed');
+    if (/:\d+$/.test(s)) throw new Error('port_not_allowed');
+
+    // Reject anything that is or looks like a raw IPv4/IPv6 literal.
+    if (s.startsWith('[') || /\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(s)) throw new Error('ip_literal_not_allowed');
+
+    // Hostname grammar: labels of a-z0-9/hyphen, no leading/trailing hyphen,
+    // and at least one dot so bare hostnames like "localhost" are rejected.
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(s)) {
+        throw new Error('invalid_domain');
+    }
+    const tld = s.split('.').pop();
+    if (!/^[a-z]{2,}$/.test(tld)) throw new Error('invalid_tld');
+
+    // Defense-in-depth against localhost/private/metadata-style names.
+    const blockedLabels = new Set(['localhost', 'internal', 'metadata', 'metadata.google.internal']);
+    for (const label of s.split('.')) {
+        if (blockedLabels.has(label)) throw new Error('reserved_name_not_allowed');
+    }
+    return s;
+}
+
+// Non-throwing wrapper for request handlers.
+const safeNorm = (raw) => { try { return normDomain(raw); } catch { return null; } };
+
+// Fixed-window rate limiter backed by KV. Returns {limited} plus remaining.
+async function rateLimit(env, bucket, limit, windowSec) {
+    const kv = env.INTEL_KV;
+    if (!kv) return { limited: false, remaining: limit };
+    const now = Math.floor(Date.now() / 1000);
+    const windowStart = now - (now % windowSec);
+    const key = `ratelimit-${bucket}-${windowStart}`;
+    const current = Number((await kv.get(key)) || 0) + 1;
+    await kv.put(key, String(current), { expirationTtl: windowSec + 5 });
+    return { limited: current > limit, remaining: Math.max(0, limit - current) };
+}
+
+const clientIp = (request) =>
+    request.headers.get('CF-Connecting-IP') || request.headers.get('X-Forwarded-For') || 'unknown';
 
 const toNum = (v) => {
     const n = Number(v);
@@ -165,6 +206,7 @@ async function fetchProducts(domain, cap) {
     for (let page = 1; page <= 10; page++) {
         const url = `https://${domain}/products.json?limit=250&page=${page}`;
         const res = await fetch(url, {
+            signal: AbortSignal.timeout(15000),
             headers: {
                 accept: 'application/json',
                 'user-agent': 'shopify-intel/1.0 (+https://x402.org)',
@@ -369,9 +411,13 @@ async function verifyAndSettle(paymentHeader, requirements) {
 }
 
 // ---- Route handlers -------------------------------------------------------
-async function handleSnapshot(url, env) {
-    const store = normDomain(url.searchParams.get('store'));
-    if (!store) return json({ error: 'Missing ?store= domain' }, 400);
+async function handleSnapshot(url, request, env) {
+    const rl = await rateLimit(env, `snap:${clientIp(request)}`, 30, 60);
+    if (rl.limited) return json({ error: 'rate_limited', retry: 'in a minute' }, 429);
+
+    const store = safeNorm(url.searchParams.get('store'));
+    if (!store) return json({ error: 'Missing or invalid ?store= domain' }, 400);
+
     try {
         const products = await fetchProducts(store, FREE_MAX_PRODUCTS);
         // Free snapshot also establishes/refreshes the baseline so the next
@@ -397,7 +443,7 @@ async function handleSnapshot(url, env) {
 }
 
 async function handleChanges(url, request, env) {
-    const store = normDomain(url.searchParams.get('store'));
+    const store = safeNorm(url.searchParams.get('store'));
     if (!store) return json({ error: 'Missing ?store= domain' }, 400);
 
     const requirements = buildRequirements(url.href, PRICE_DEEP_USD, `Shopify change detection for ${store}`);
@@ -443,7 +489,7 @@ async function handleChanges(url, request, env) {
 
 // High-value paid tier: distilled competitor intelligence report.
 async function handleIntel(url, request, env) {
-    const store = normDomain(url.searchParams.get('store'));
+    const store = safeNorm(url.searchParams.get('store'));
     if (!store) return json({ error: 'Missing ?store= domain' }, 400);
 
     const requirements = buildRequirements(url.href, PRICE_INTEL_USD, `Competitor intelligence report for ${store}`);
@@ -492,7 +538,7 @@ async function handleBatch(url, request, env) {
     } catch {
         return json({ error: 'invalid JSON body; expected {stores:[...]}' }, 400);
     }
-    const stores = [...new Set((parsed.stores || []).map(normDomain).filter(Boolean))];
+    const stores = [...new Set((parsed.stores || []).map(safeNorm).filter(Boolean))];
     if (!stores.length) return json({ error: 'No stores provided' }, 400);
     if (stores.length > 50) return json({ error: 'Up to 50 stores per batch call' }, 400);
 
@@ -608,7 +654,7 @@ async function handleMcp(request, env) {
 
         if (name === 'shopify_batch_watch') {
             const rawStores = params?.arguments?.stores;
-            const stores = [...new Set((Array.isArray(rawStores) ? rawStores : []).map(normDomain).filter(Boolean))];
+            const stores = [...new Set((Array.isArray(rawStores) ? rawStores : []).map(safeNorm).filter(Boolean))];
             if (!stores.length) return rerr(-32602, 'Missing required argument: stores (non-empty array)');
             if (stores.length > BATCH_MAX_STORES) return rerr(-32602, `Up to ${BATCH_MAX_STORES} stores per call`);
             const price = Number((stores.length * PRICE_PER_STORE_USD).toFixed(2));
@@ -631,7 +677,7 @@ async function handleMcp(request, env) {
             return toolText(txt, res.status >= 400, outHeaders);
         }
 
-        const store = normDomain(params?.arguments?.store);
+        const store = safeNorm(params?.arguments?.store);
         if (!store) return rerr(-32602,'Missing required argument: store');
 
         if (name === 'shopify_snapshot') {
@@ -794,12 +840,38 @@ function renderWellKnown() {
     });
 }
 
+const SECURITY_HEADERS = {
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'DENY',
+    'Referrer-Policy': 'no-referrer',
+    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    'Cross-Origin-Opener-Policy': 'same-origin',
+    'Cross-Origin-Resource-Policy': 'same-site',
+};
+
+function withSecurity(response) {
+    const h = new Headers(response.headers);
+    for (const [k, v] of Object.entries(SECURITY_HEADERS)) h.set(k, v);
+    return new Response(response.body, { status: response.status, statusText: response.statusText, headers: h });
+}
+
 export default {
     async fetch(request, env) {
-        const url = new URL(request.url);
-        const { pathname } = url;
+        try {
+            return withSecurity(await handle(request, env));
+        } catch (err) {
+            // Never leak internals; log server-side only.
+            console.error('unhandled:', String(err?.message || err));
+            return withSecurity(json({ error: 'internal_error' }, 500));
+        }
+    },
+};
 
-        if (pathname === '/') return renderHome();
+async function handle(request, env) {
+    const url = new URL(request.url);
+    const { pathname } = url;
+
+    if (pathname === '/') return renderHome();
         if (pathname === '/v1') {
             return json({
                 service: 'Shopify Change Intelligence',
@@ -824,11 +896,10 @@ export default {
         if (pathname === '/.well-known/x402') return renderWellKnown();
         if (pathname === '/.well-known/glama.json') return renderGlama();
         if (pathname === '/mcp') return handleMcp(request, env);
-        if (pathname === '/v1/snapshot') return handleSnapshot(url, env);
+        if (pathname === '/v1/snapshot') return handleSnapshot(url, request, env);
         if (pathname === '/v1/changes') return handleChanges(url, request, env);
         if (pathname === '/v1/intel') return handleIntel(url, request, env);
         if (pathname === '/v1/batch') return handleBatch(url, request, env);
 
-        return json({ error: 'not_found' }, 404);
-    },
-};
+    return json({ error: 'not_found' }, 404);
+}
