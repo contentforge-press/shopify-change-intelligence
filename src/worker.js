@@ -338,6 +338,166 @@ async function handleChanges(url, request, env) {
     });
 }
 
+async function handleMcp(request, env) {
+    if (request.method === 'GET') return json({ jsonrpc: '2.0', error: { code: -32000, message: 'MCP endpoint expects POST' } }, 405);
+
+    let msg;
+    try {
+        msg = await request.json();
+    } catch {
+        return json({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }, 400);
+    }
+
+    const { id, method, params } = msg;
+    const reply = (result, extra = {}) => json({ jsonrpc: '2.0', id, result }, 200, extra);
+    const rerr = (code, message, extra = {}) => json({ jsonrpc: '2.0', id, error: { code, message } }, 200, extra);
+    const toolText = (text, isError = false, extra = {}) => reply({ content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) }, extra);
+
+    if (method === 'notifications/initialized') return new Response(null, { status: 202 });
+
+    if (method === 'initialize') {
+        return reply({
+            protocolVersion: '2025-06-18',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'shopify-change-intelligence', version: '1.0.0' },
+        });
+    }
+
+    if (method === 'tools/list') {
+        return reply({
+            tools: [
+                {
+                    name: 'shopify_snapshot',
+                    description: 'FREE. Returns a live snapshot of a public Shopify store: product count, price range, availability and a sample of products. Reads the public /products.json feed.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: { store: { type: 'string', description: 'Shopify domain, e.g. allbirds.com' } },
+                        required: ['store'],
+                    },
+                },
+                {
+                    name: 'shopify_changes',
+                    description: 'PAID ($0.05 USDC on Base via x402). Returns change intelligence vs the last snapshot: new/removed products, price increases/decreases, restock/out-of-stock.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: { store: { type: 'string', description: 'Shopify domain, e.g. allbirds.com' } },
+                        required: ['store'],
+                    },
+                },
+            ],
+        });
+    }
+
+    if (method === 'tools/call') {
+        const name = params?.name;
+        const store = normDomain(params?.arguments?.store);
+        if (!store) return rerr(-32602, 'Missing required argument: store');
+
+        if (name === 'shopify_snapshot') {
+            try {
+                const products = await fetchProducts(store, FREE_MAX_PRODUCTS);
+                const kv = env.INTEL_KV;
+                if (kv) await kv.put(`snapshot-${store}`, JSON.stringify({ savedAt: new Date().toISOString(), products }));
+                const prices = products.map((p) => p.minPrice).filter((x) => x !== null);
+                return toolText(JSON.stringify({
+                    store,
+                    productCount: products.length,
+                    priceRange: prices.length ? { min: Math.min(...prices), max: Math.max(...prices) } : null,
+                    inStock: products.filter((p) => p.available).length,
+                    sample: products.slice(0, 10).map((p) => ({ title: p.title, minPrice: p.minPrice, available: p.available, url: p.url })),
+                }, null, 2));
+            } catch (err) {
+                return toolText(`error: ${err.message}`, true);
+            }
+        }
+
+        if (name === 'shopify_changes') {
+            const requirements = buildRequirements(new URL(request.url).href, PRICE_DEEP_USD, `Shopify change detection for ${store}`);
+            const paymentHeader = request.headers.get('PAYMENT') || request.headers.get('X-PAYMENT');
+            if (!paymentHeader) {
+                return toolText(
+                    `This tool costs $${PRICE_DEEP_USD} USDC on Base via the x402 protocol. Pay to ${PAY_TO} and retry the call carrying the x402 payment in the PAYMENT header. See the PAYMENT-REQUIRED response header for the machine-readable challenge.`,
+                    true,
+                    { 'PAYMENT-REQUIRED': b64encode(requirements) },
+                );
+            }
+            let settlement;
+            try {
+                settlement = await verifyAndSettle(paymentHeader, requirements);
+            } catch (err) {
+                return toolText(`verify error: ${err.message}`, true);
+            }
+            if (!settlement.ok) return toolText(`payment rejected: ${settlement.reason}`, true);
+
+            try {
+                const products = await fetchProducts(store, 0);
+                const kv = env.INTEL_KV;
+                const key = `snapshot-${store}`;
+                const raw = kv ? await kv.get(key, 'json') : null;
+                let changes = [];
+                let baseline = true;
+                if (raw && Array.isArray(raw.products)) {
+                    baseline = false;
+                    changes = diffProducts(raw.products, products);
+                }
+                if (kv) await kv.put(key, JSON.stringify({ savedAt: new Date().toISOString(), products }));
+                return toolText(JSON.stringify({
+                    store,
+                    productCount: products.length,
+                    baseline,
+                    changeCount: changes.length,
+                    changes,
+                    settlement: { payer: settlement.payer, transaction: settlement.transaction },
+                }, null, 2));
+            } catch (err) {
+                return toolText(`error: ${err.message}`, true);
+            }
+        }
+
+        return rerr(-32601, `Unknown tool: ${name}`);
+    }
+
+    return rerr(-32601, `Method not found: ${method}`);
+}
+
+function renderGlama() {
+    return json({
+        $schema: 'https://glama.ai/mcp/schemas/connector.json',
+        maintainers: [{ email: 'contentforge.press@outlook.com' }],
+    });
+}
+
+function renderWellKnown() {
+    return json({
+        x402Version: 1,
+        network: NETWORK,
+        chainId: CHAIN_ID,
+        payTo: PAY_TO,
+        assets: {
+            [NETWORK]: {
+                address: USDC_BASE,
+                symbol: 'USDC',
+                decimals: 6,
+            },
+        },
+        facilitator: {
+            baseUrl: FACILITATOR,
+            endpoints: { verify: '/verify', settle: '/settle', supported: '/supported' },
+            kinds: ['exact'],
+        },
+        resources: [
+            {
+                url: '/v1/changes',
+                description: 'Shopify change intelligence: new/removed products, price changes, restock/out-of-stock vs. history.',
+                method: 'GET',
+                mimeType: 'application/json',
+                price: `${PRICE_DEEP_USD} USDC`,
+                scheme: 'exact',
+            },
+        ],
+    });
+}
+
 export default {
     async fetch(request, env) {
         const url = new URL(request.url);
@@ -358,6 +518,9 @@ export default {
             });
         }
         if (pathname === '/health') return json({ ok: true, time: new Date().toISOString() });
+        if (pathname === '/.well-known/x402') return renderWellKnown();
+        if (pathname === '/.well-known/glama.json') return renderGlama();
+        if (pathname === '/mcp') return handleMcp(request, env);
         if (pathname === '/v1/snapshot') return handleSnapshot(url, env);
         if (pathname === '/v1/changes') return handleChanges(url, request, env);
 
