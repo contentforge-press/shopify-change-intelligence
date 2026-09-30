@@ -1385,6 +1385,316 @@ async function handleSubscribe(url, request, env) {
     });
 }
 
+// ---- Dashboard & watchlist ------------------------------------------------
+const PLAN_STORE_LIMITS = { pro: 25, business: 150, enterprise: 100000 };
+
+async function loadSubscription(kv, accessKey) {
+    if (!kv || !accessKey) return null;
+    const raw = await kv.get(`sub-${accessKey}`);
+    if (!raw) return null;
+    const sub = JSON.parse(raw);
+    sub.active = new Date(sub.expiresAt).getTime() > Date.now();
+    return sub;
+}
+
+async function getWatchlist(kv, accessKey) {
+    const raw = await kv.get(`watch-${accessKey}`);
+    if (!raw) return { stores: [], webhookUrl: '', emailAlerts: '', updatedAt: null };
+    return JSON.parse(raw);
+}
+
+function renderDashboard() {
+    return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dashboard · Shopify Change Intelligence</title>
+<style>
+:root{--bg:#0b0e14;--card:#141925;--line:#222a3a;--fg:#e8ecf4;--mut:#8b95a7;--acc:#5b8cff;--green:#3ecf8e;--red:#ff6b6b}
+*{box-sizing:border-box}
+body{margin:0;font:14.5px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg)}
+.wrap{max-width:980px;margin:0 auto;padding:40px 20px}
+h1{font-size:26px;margin:0 0 4px}
+a{color:#9db8ff}
+.sub{color:var(--mut);font-size:13.5px;margin-bottom:22px}
+.login{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;display:flex;gap:10px;flex-wrap:wrap}
+.login input{flex:1;min-width:240px;background:#0d1119;border:1px solid var(--line);border-radius:9px;color:var(--fg);padding:11px 13px;font-size:14px}
+button{padding:11px 18px;border-radius:9px;border:1px solid var(--acc);background:var(--acc);color:#fff;font-weight:600;cursor:pointer;font-size:14px}
+button.ghost{background:transparent;color:#cdd9ff}
+.app{display:none}.app.on{display:block}
+.bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:18px}
+.badge{background:#0d1119;border:1px solid var(--line);border-radius:999px;padding:5px 13px;font-size:12.5px;color:#c6cdda}
+.badge b{color:var(--green)}
+.addrow{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0 20px}
+.addrow input{flex:1;min-width:200px;background:#0d1119;border:1px solid var(--line);border-radius:9px;color:var(--fg);padding:11px 13px}
+.storelist{display:grid;gap:10px}
+.store{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.store .top{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.store .dom{font-weight:600}
+.store .meta{color:var(--mut);font-size:12.5px}
+.changes{margin-top:10px;display:none}.changes.on{display:block}
+.chg{padding:6px 0 6px 22px;position:relative;font-size:13px;color:#c6cdda;border-top:1px solid rgba(255,255,255,.05)}
+.chg:before{position:absolute;left:0;font-weight:700}
+.chg.up:before{content:"▲";color:var(--red)} .chg.down:before{content:"▼";color:var(--green)}
+.chg.new:before{content:"＋";color:var(--acc)} .chg.gone:before{content:"－";color:var(--mut)}
+.chg.in:before{content:"↺";color:var(--green)} .chg.out:before{content:"⊘";color:var(--red)}
+.pill{font-size:11px;padding:2px 9px;border-radius:999px;font-weight:600}
+.pill.k0{background:rgba(62,207,142,.15);color:var(--green)}
+.pill.k{background:rgba(255,107,107,.15);color:var(--red)}
+.settings{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-top:22px}
+.settings input{width:100%;background:#0d1119;border:1px solid var(--line);border-radius:9px;color:var(--fg);padding:10px 12px;margin-top:6px}
+.muted{color:var(--mut);font-size:12.5px}
+.err{color:var(--red);font-size:13.5px;margin-top:8px;min-height:18px}
+</style></head>
+<body><div class="wrap">
+<h1>Competitor dashboard</h1>
+<div class="sub">Track stores, get change alerts. <a href="/pricing">View plans</a> · <a href="/">Home</a></div>
+
+<div id="loginview">
+  <div class="login">
+    <input id="key" placeholder="Paste your access key (starts with sci_)" autocomplete="off">
+    <button onclick="connect()">Open dashboard</button>
+  </div>
+  <div class="err" id="loginerr"></div>
+  <p class="sub" style="margin-top:16px">No key yet? <a href="/pricing">Get a subscription</a> — pay in USDC, receive your key instantly.</p>
+</div>
+
+<div class="app" id="appview">
+  <div class="bar">
+    <div>
+      <span class="badge">Plan <b id="planname"></b></span>
+      <span class="badge">Renews/expires <b id="exp"></b></span>
+      <span class="badge"><b id="count"></b> stores</span>
+    </div>
+    <button onclick="refreshAll()" id="refreshbtn">Refresh all</button>
+  </div>
+  <div class="err" id="apperr"></div>
+  <div class="addrow">
+    <input id="newstore" placeholder="competitor-store.com" autocomplete="off">
+    <button onclick="addStore()">Add store</button>
+  </div>
+  <div class="storelist" id="storelist"></div>
+  <div class="settings">
+    <b>Alert webhook</b>
+    <p class="muted" style="margin:4px 0">We POST new changes here on every refresh (Slack, Zapier, your app…).</p>
+    <input id="webhook" placeholder="https://hooks.example.com/...">
+    <div style="margin-top:10px"><button class="ghost" onclick="saveSettings()">Save settings</button></div>
+  </div>
+  <p style="margin-top:18px"><a href="#" onclick="logout();return false">Use another key</a></p>
+</div>
+</div>
+<script>
+let state=null;
+const $=id=>document.getElementById(id);
+function connect(){
+  const key=$('key').value.trim(); $('loginerr').textContent='';
+  if(!key){$('loginerr').textContent='Please enter your access key.';return;}
+  fetch('/v1/watch?key='+encodeURIComponent(key)).then(r=>r.json()).then(d=>{
+    if(d.error){$('loginerr').textContent=d.error;return;}
+    state=d; $('loginview').style.display='none'; $('appview').classList.add('on');
+    render();
+  }).catch(e=>$('loginerr').textContent='Connection error: '+e);
+}
+function logout(){location.reload();}
+function render(){
+  $('planname').textContent=state.plan;
+  $('exp').textContent=(state.active?'':'EXPIRED · ')+state.expiresAt.slice(0,10);
+  $('count').textContent=state.stores.length;
+  $('webhook').value=state.webhookUrl||'';
+  const list=$('storelist');
+  if(!state.stores.length){list.innerHTML='<p class="muted">No stores yet. Add your first competitor above.</p>';return;}
+  list.innerHTML=state.stores.map(s=>{
+    const n=(s.lastChanges||[]).length;
+    return '<div class="store"><div class="top"><div><div class="dom">'+s.store+
+      '</div><div class="meta">'+(s.lastChecked?('checked '+new Date(s.lastChecked).toLocaleString()):'not checked yet')+'</div></div>'+
+      '<div><span class="pill '+(n?'k':'k0')+'">'+n+' changes</span> '+
+      '<button class="ghost" onclick="toggleChanges(this)">Show</button> '+
+      '<button class="ghost" onclick="refreshOne(\\''+s.store+'\\')">Check now</button> '+
+      '<button class="ghost" onclick="removeStore(\\''+s.store+'\\')">Remove</button></div></div>'+
+      '<div class="changes">'+((s.lastChanges||[]).map(c=>changeHtml(c)).join('')||'<div class="muted">No changes since last snapshot.</div>')+'</div></div>';
+  }).join('');
+}
+function changeHtml(c){
+  const map={price_increased:['up','Price ↑'],price_decreased:['down','Price ↓'],new_product:['new','New'],removed_product:['gone','Removed'],back_in_stock:['in','Restocked'],out_of_stock:['out','Out of stock']};
+  const m=map[c.changeType]||['new',c.changeType];
+  let txt=c.title||'';
+  if(c.from!=null) txt+=' — $'+c.from+' → $'+c.to+(c.percent?(' ('+c.percent+'%)'):'');
+  return '<div class="chg '+m[0]+'"><b>'+m[1]+'</b> · '+txt+'</div>';
+}
+function toggleChanges(btn){const box=btn.closest('.store').querySelector('.changes');box.classList.toggle('on');btn.textContent=box.classList.contains('on')?'Hide':'Show';}
+function callApi(extra){
+  $('apperr').textContent='';
+  return fetch('/v1/watch?key='+encodeURIComponent(state.accessKey)+(extra||''),{method:extra?'POST':'GET',
+    body:extra?JSON.stringify({}):null,headers:{'content-type':'application/json'}})
+  .then(async r=>{const d=await r.json();if(d.error)throw d.error;return d;});
+}
+function addStore(){
+  const store=$('newstore').value.trim(); if(!store)return;
+  fetch('/v1/watch/add?key='+encodeURIComponent(state.accessKey),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({store})})
+  .then(r=>r.json()).then(d=>{if(d.error){$('apperr').textContent=d.error;return;}state=d;$('newstore').value='';render();})
+  .catch(e=>$('apperr').textContent=e.message||String(e));
+}
+function removeStore(store){
+  fetch('/v1/watch/remove?key='+encodeURIComponent(state.accessKey),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({store})})
+  .then(r=>r.json()).then(d=>{if(d.error){$('apperr').textContent=d.error;return;}state=d;render();})
+  .catch(e=>$('apperr').textContent=e.message||String(e));
+}
+function refreshOne(store){
+  $('refreshbtn').textContent='Checking…';
+  fetch('/v1/watch/refresh?key='+encodeURIComponent(state.accessKey)+'&store='+encodeURIComponent(store))
+  .then(r=>r.json()).then(d=>{if(d.error){$('apperr').textContent=d.error;return;}state=d;render();})
+  .catch(e=>$('apperr').textContent=e.message||String(e)).finally(()=>$('refreshbtn').textContent='Refresh all');
+}
+function refreshAll(){
+  $('refreshbtn').textContent='Refreshing…';
+  fetch('/v1/watch/refresh?key='+encodeURIComponent(state.accessKey)).then(r=>r.json()).then(d=>{
+    if(d.error){$('apperr').textContent=d.error;return;}state=d;render();
+  }).catch(e=>$('apperr').textContent=e.message||String(e)).finally(()=>$('refreshbtn').textContent='Refresh all');
+}
+function saveSettings(){
+  const webhookUrl=$('webhook').value.trim();
+  fetch('/v1/watch/settings?key='+encodeURIComponent(state.accessKey),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({webhookUrl})})
+  .then(r=>r.json()).then(d=>{if(d.error){$('apperr').textContent=d.error;return;}state=d;$('apperr').textContent='Saved ✓';render();})
+  .catch(e=>$('apperr').textContent=e.message||String(e));
+}
+</script>
+</body></html>`;
+}
+
+async function watchView(kv, accessKey) {
+    const sub = await loadSubscription(kv, accessKey);
+    if (!sub) return { error: 'invalid_key', status: 401 };
+    const wl = await getWatchlist(kv, accessKey);
+    return {
+        accessKey,
+        plan: sub.plan,
+        active: sub.active,
+        expiresAt: sub.expiresAt,
+        storeLimit: PLAN_STORE_LIMITS[sub.plan] || 0,
+        stores: wl.stores,
+        webhookUrl: wl.webhookUrl || '',
+        updatedAt: wl.updatedAt,
+    };
+}
+
+async function handleWatchGet(url, request, env) {
+    const key = url.searchParams.get('key');
+    const view = await watchView(env.INTEL_KV, key);
+    return json(view, view.status || 200);
+}
+
+async function readJsonBody(request) {
+    try { return await request.json(); } catch { return {}; }
+}
+
+async function handleWatchAdd(url, request, env) {
+    const kv = env.INTEL_KV;
+    const key = url.searchParams.get('key');
+    const sub = await loadSubscription(kv, key);
+    if (!sub) return json({ error: 'invalid_key' }, 401);
+    if (!sub.active) return json({ error: 'subscription_expired', hint: 'renew at /pricing' }, 402);
+
+    const body = await readJsonBody(request);
+    const store = safeNorm(body.store);
+    if (!store) return json({ error: 'missing_store' }, 400);
+
+    const wl = await getWatchlist(kv, key);
+    const limit = PLAN_STORE_LIMITS[sub.plan] || 0;
+    if (wl.stores.length >= limit) return json({ error: 'plan_limit_reached', limit }, 400);
+    if (wl.stores.some(s => s.store === store)) return json({ error: 'already_added' }, 400);
+
+    wl.stores.push({ store, addedAt: new Date().toISOString(), lastChecked: null, lastChanges: [] });
+    wl.updatedAt = new Date().toISOString();
+    await kv.put(`watch-${key}`, JSON.stringify(wl));
+    return json(await watchView(kv, key));
+}
+
+async function handleWatchRemove(url, request, env) {
+    const kv = env.INTEL_KV;
+    const key = url.searchParams.get('key');
+    const sub = await loadSubscription(kv, key);
+    if (!sub) return json({ error: 'invalid_key' }, 401);
+    const body = await readJsonBody(request);
+    const store = safeNorm(body.store);
+    const wl = await getWatchlist(kv, key);
+    wl.stores = wl.stores.filter(s => s.store !== store);
+    wl.updatedAt = new Date().toISOString();
+    await kv.put(`watch-${key}`, JSON.stringify(wl));
+    return json(await watchView(kv, key));
+}
+
+async function handleWatchSettings(url, request, env) {
+    const kv = env.INTEL_KV;
+    const key = url.searchParams.get('key');
+    const sub = await loadSubscription(kv, key);
+    if (!sub) return json({ error: 'invalid_key' }, 401);
+    const body = await readJsonBody(request);
+    const webhookUrl = typeof body.webhookUrl === 'string' ? body.webhookUrl.trim().slice(0, 500) : '';
+    if (webhookUrl && !/^https:\/\//.test(webhookUrl)) return json({ error: 'webhook_must_be_https' }, 400);
+    const wl = await getWatchlist(kv, key);
+    wl.webhookUrl = webhookUrl;
+    wl.updatedAt = new Date().toISOString();
+    await kv.put(`watch-${key}`, JSON.stringify(wl));
+    return json(await watchView(kv, key));
+}
+
+async function checkStore(store) {
+    const products = await fetchProducts(store, 0);
+    return products;
+}
+
+async function handleWatchRefresh(url, request, env) {
+    const kv = env.INTEL_KV;
+    const key = url.searchParams.get('key');
+    const sub = await loadSubscription(kv, key);
+    if (!sub) return json({ error: 'invalid_key' }, 401);
+    if (!sub.active) return json({ error: 'subscription_expired', hint: 'renew at /pricing' }, 402);
+
+    const wl = await getWatchlist(kv, key);
+    const onlyStore = safeNorm(url.searchParams.get('store'));
+    const targets = onlyStore ? wl.stores.filter(s => s.store === onlyStore) : wl.stores;
+    if (!targets.length) return json(await watchView(kv, key));
+
+    const alerts = [];
+    await Promise.all(targets.map(async (entry) => {
+        try {
+            const products = await checkStore(entry.store);
+            const snapKey = `snapshot-${entry.store}`;
+            const prevRaw = await kv.get(snapKey);
+            let changes = [];
+            if (prevRaw) {
+                const prevObj = JSON.parse(prevRaw);
+                changes = diffProducts(prevObj.products, products);
+            }
+            await kv.put(snapKey, JSON.stringify({ savedAt: new Date().toISOString(), store: entry.store, products }));
+            entry.lastChecked = new Date().toISOString();
+            entry.lastChanges = changes.slice(0, 100);
+            if (changes.length && wl.webhookUrl) {
+                alerts.push({ store: entry.store, changes: changes.slice(0, 50), checkedAt: entry.lastChecked });
+            }
+        } catch (e) {
+            entry.lastChecked = new Date().toISOString();
+            entry.error = String(e.message || e).slice(0, 160);
+        }
+    }));
+
+    wl.updatedAt = new Date().toISOString();
+    await kv.put(`watch-${key}`, JSON.stringify(wl));
+
+    if (wl.webhookUrl && alerts.length) {
+        for (const payload of alerts) {
+            try {
+                await fetch(wl.webhookUrl, {
+                    method: 'POST',
+                    headers: { 'content-type': 'application/json' },
+                    body: JSON.stringify({ source: 'shopify-change-intelligence', ...payload }),
+                });
+            } catch { /* webhook failures must not block the dashboard */ }
+        }
+    }
+
+    return json(await watchView(kv, key));
+}
+
 function renderEmbed() {
     const snippet = '<div class="sci-widget" data-store="allbirds.com"></div>\n<script async src="https://shopify-intel.contentforge-press.workers.dev/widget.js"><\/script>';
     return `<!doctype html>
@@ -1543,6 +1853,12 @@ async function handle(request, env) {
         if (pathname === '/contact') return renderContact();
         if (pathname === '/pricing') return new Response(renderPricing(), { headers: { 'content-type': 'text/html; charset=utf-8' } });
         if (pathname === '/v1/subscribe') return handleSubscribe(url, request, env);
+        if (pathname === '/dashboard') return new Response(renderDashboard(), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+        if (pathname === '/v1/watch') return handleWatchGet(url, request, env);
+        if (pathname === '/v1/watch/add') return handleWatchAdd(url, request, env);
+        if (pathname === '/v1/watch/remove') return handleWatchRemove(url, request, env);
+        if (pathname === '/v1/watch/settings') return handleWatchSettings(url, request, env);
+        if (pathname === '/v1/watch/refresh') return handleWatchRefresh(url, request, env);
         if (pathname === '/mcp') return handleMcp(request, env);
         if (pathname === '/robots.txt') return new Response(ROBOTS_TXT, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
         if (pathname === '/llms.txt') return new Response(LLMS_TXT, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
