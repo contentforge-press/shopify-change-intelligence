@@ -17,6 +17,7 @@ const PRICE_PER_STORE_USD = 0.03;
 const BATCH_MAX_STORES = 50;
 const PRICE_LANDSCAPE_USD = 5;
 const LANDSCAPE_MAX_STORES = 10;
+const ADMIN_KEY = 'ba951afdb936eecd4ffb9ddfb1b44b25f47bbab1dfc391ac';
 
 // Full-catalog fetch cap for paid tiers (0 = all pages).
 const FULL_CAP = 0;
@@ -639,6 +640,54 @@ async function handleBatch(url, request, env) {
     });
 }
 
+// ---- Usage analytics (internal, day-bucket counters in KV) ----------------
+function classifyClient(request) {
+    const ua = (request.headers.get('user-agent') || '').toLowerCase();
+    if (/mcp|x402|anthropic|openai|claude|cursor|agent|llm|gpt|gemini|copilot|bot/.test(ua)) return 'agent';
+    return 'browser';
+}
+
+async function recordHit(request, response, env) {
+    try {
+        const u = new URL(request.url);
+        const day = new Date().toISOString().slice(0, 10);
+        const path = u.pathname;
+        if (path === '/health' || path.startsWith('/.well-known')) return;
+        const kind = classifyClient(request);
+        const status402 = response.status === 402;
+        const paid = request.headers.get('PAYMENT') ? 1 : 0;
+        const key = `stats-${day}`;
+        const raw = await env.INTEL_KV.get(key);
+        const s = raw ? JSON.parse(raw) : { total: 0, agent: 0, browser: 0, payments402: 0, paidTries: 0, paths: {}, clients: {} };
+        s.total += 1;
+        s[kind] += 1;
+        if (status402) s.payments402 += 1;
+        if (paid) s.paidTries += 1;
+        const pk = `${path}|${kind}${status402 ? '|402' : ''}`;
+        s.paths[pk] = (s.paths[pk] || 0) + 1;
+        const ua = request.headers.get('user-agent') || 'unknown';
+        const ck = `${kind}:${ua.slice(0, 60)}`;
+        s.clients[ck] = (s.clients[ck] || 0) + 1;
+        await env.INTEL_KV.put(key, JSON.stringify(s));
+    } catch (e) {
+        // Analytics must never break a request.
+    }
+}
+
+async function handleStats(url, request, env) {
+    const keyParam = url.searchParams.get('key');
+    const auth = request.headers.get('x-admin-key') || keyParam;
+    if (auth !== ADMIN_KEY) return json({ error: 'forbidden' }, 403);
+    const n = Math.min(Number(url.searchParams.get('days')) || 7, 30);
+    const days = [];
+    for (let i = 0; i < n; i++) {
+        const d = new Date(Date.now() - i * 864e5).toISOString().slice(0, 10);
+        const raw = await env.INTEL_KV.get(`stats-${d}`);
+        if (raw) days.push({ day: d, ...JSON.parse(raw) });
+    }
+    return json({ days });
+}
+
 async function handleLandscape(url, request, env) {
     let parsed = {};
     if (request.method === 'POST') {
@@ -1015,7 +1064,9 @@ function withSecurity(response) {
 export default {
     async fetch(request, env) {
         try {
-            return withSecurity(await handle(request, env));
+            const response = withSecurity(await handle(request, env));
+            if (request.method !== 'OPTIONS') recordHit(request, response, env);
+            return response;
         } catch (err) {
             // Never leak internals; log server-side only.
             console.error('unhandled:', String(err?.message || err));
@@ -1060,6 +1111,7 @@ async function handle(request, env) {
         if (pathname === '/v1/intel') return handleIntel(url, request, env);
         if (pathname === '/v1/batch') return handleBatch(url, request, env);
         if (pathname === '/v1/landscape') return handleLandscape(url, request, env);
+        if (pathname === '/v1/admin/stats') return handleStats(url, request, env);
 
     return json({ error: 'not_found' }, 404);
 }
