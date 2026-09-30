@@ -1484,8 +1484,11 @@ button.ghost{background:transparent;color:#cdd9ff}
   <div class="storelist" id="storelist"></div>
   <div class="settings">
     <b>Alert webhook</b>
-    <p class="muted" style="margin:4px 0">We POST new changes here on every refresh (Slack, Zapier, your app…).</p>
+    <p class="muted" style="margin:4px 0">We POST new changes here on every auto-refresh (Slack, Zapier, your app…).</p>
     <input id="webhook" placeholder="https://hooks.example.com/...">
+    <b style="display:block;margin-top:14px">Email alerts</b>
+    <p class="muted" style="margin:4px 0">Get an email digest when changes are detected automatically.</p>
+    <input id="alertemail" placeholder="you@company.com">
     <div style="margin-top:10px"><button class="ghost" onclick="saveSettings()">Save settings</button></div>
   </div>
   <p style="margin-top:18px"><a href="#" onclick="logout();return false">Use another key</a></p>
@@ -1509,6 +1512,7 @@ function render(){
   $('exp').textContent=(state.active?'':'EXPIRED · ')+state.expiresAt.slice(0,10);
   $('count').textContent=state.stores.length;
   $('webhook').value=state.webhookUrl||'';
+  $('alertemail').value=state.alertEmail||'';
   const list=$('storelist');
   if(!state.stores.length){list.innerHTML='<p class="muted">No stores yet. Add your first competitor above.</p>';return;}
   list.innerHTML=state.stores.map(s=>{
@@ -1561,7 +1565,8 @@ function refreshAll(){
 }
 function saveSettings(){
   const webhookUrl=$('webhook').value.trim();
-  fetch('/v1/watch/settings?key='+encodeURIComponent(state.accessKey),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({webhookUrl})})
+  const alertEmail=$('alertemail').value.trim();
+  fetch('/v1/watch/settings?key='+encodeURIComponent(state.accessKey),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({webhookUrl,alertEmail})})
   .then(r=>r.json()).then(d=>{if(d.error){$('apperr').textContent=d.error;return;}state=d;$('apperr').textContent='Saved ✓';render();})
   .catch(e=>$('apperr').textContent=e.message||String(e));
 }
@@ -1581,6 +1586,7 @@ async function watchView(kv, accessKey) {
         storeLimit: PLAN_STORE_LIMITS[sub.plan] || 0,
         stores: wl.stores,
         webhookUrl: wl.webhookUrl || '',
+        alertEmail: wl.alertEmail || '',
         updatedAt: wl.updatedAt,
     };
 }
@@ -1639,8 +1645,11 @@ async function handleWatchSettings(url, request, env) {
     const body = await readJsonBody(request);
     const webhookUrl = typeof body.webhookUrl === 'string' ? body.webhookUrl.trim().slice(0, 500) : '';
     if (webhookUrl && !/^https:\/\//.test(webhookUrl)) return json({ error: 'webhook_must_be_https' }, 400);
+    const alertEmail = typeof body.alertEmail === 'string' ? body.alertEmail.trim().slice(0, 200) : '';
+    if (alertEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(alertEmail)) return json({ error: 'invalid_email' }, 400);
     const wl = await getWatchlist(kv, key);
     wl.webhookUrl = webhookUrl;
+    wl.alertEmail = alertEmail;
     wl.updatedAt = new Date().toISOString();
     await kv.put(`watch-${key}`, JSON.stringify(wl));
     return json(await watchView(kv, key));
@@ -1651,45 +1660,48 @@ async function checkStore(store) {
     return products;
 }
 
-async function handleWatchRefresh(url, request, env) {
-    const kv = env.INTEL_KV;
-    const key = url.searchParams.get('key');
-    const sub = await loadSubscription(kv, key);
-    if (!sub) return json({ error: 'invalid_key' }, 401);
-    if (!sub.active) return json({ error: 'subscription_expired', hint: 'renew at /pricing' }, 402);
+// Refresh one watchlist entry in place; returns alert payload if changes found.
+async function refreshWatchEntry(kv, entry) {
+    const products = await checkStore(entry.store);
+    const snapKey = `snapshot-${entry.store}`;
+    const prevRaw = await kv.get(snapKey);
+    let changes = [];
+    if (prevRaw) {
+        const prevObj = JSON.parse(prevRaw);
+        changes = diffProducts(prevObj.products, products);
+    }
+    await kv.put(snapKey, JSON.stringify({ savedAt: new Date().toISOString(), store: entry.store, products }));
+    entry.lastChecked = new Date().toISOString();
+    entry.error = null;
+    entry.lastChanges = changes.slice(0, 100);
+    if (changes.length) return { store: entry.store, changes: changes.slice(0, 50), checkedAt: entry.lastChecked };
+    return null;
+}
 
-    const wl = await getWatchlist(kv, key);
-    const onlyStore = safeNorm(url.searchParams.get('store'));
-    const targets = onlyStore ? wl.stores.filter(s => s.store === onlyStore) : wl.stores;
-    if (!targets.length) return json(await watchView(kv, key));
-
+// Refresh (a subset of) a watchlist's stores, persist, and dispatch webhook/email alerts.
+async function runWatchlistRefresh(kv, wl, targetStores) {
+    const targets = targetStores && targetStores.length
+        ? wl.stores.filter(s => targetStores.includes(s.store))
+        : wl.stores;
     const alerts = [];
     await Promise.all(targets.map(async (entry) => {
         try {
-            const products = await checkStore(entry.store);
-            const snapKey = `snapshot-${entry.store}`;
-            const prevRaw = await kv.get(snapKey);
-            let changes = [];
-            if (prevRaw) {
-                const prevObj = JSON.parse(prevRaw);
-                changes = diffProducts(prevObj.products, products);
-            }
-            await kv.put(snapKey, JSON.stringify({ savedAt: new Date().toISOString(), store: entry.store, products }));
-            entry.lastChecked = new Date().toISOString();
-            entry.lastChanges = changes.slice(0, 100);
-            if (changes.length && wl.webhookUrl) {
-                alerts.push({ store: entry.store, changes: changes.slice(0, 50), checkedAt: entry.lastChecked });
-            }
+            const alert = await refreshWatchEntry(kv, entry);
+            if (alert) alerts.push(alert);
         } catch (e) {
             entry.lastChecked = new Date().toISOString();
             entry.error = String(e.message || e).slice(0, 160);
         }
     }));
-
     wl.updatedAt = new Date().toISOString();
-    await kv.put(`watch-${key}`, JSON.stringify(wl));
+    await dispatchAlerts(wl, alerts);
+    return alerts;
+}
 
-    if (wl.webhookUrl && alerts.length) {
+async function dispatchAlerts(wl, alerts) {
+    if (!alerts.length) return;
+
+    if (wl.webhookUrl) {
         for (const payload of alerts) {
             try {
                 await fetch(wl.webhookUrl, {
@@ -1701,7 +1713,102 @@ async function handleWatchRefresh(url, request, env) {
         }
     }
 
+    if (wl.alertEmail) {
+        const ok = await sendAlertEmail(wl.alertEmail, alerts);
+        if (!ok) { /* logged inside; email is best-effort */ }
+    }
+}
+
+function describeChange(c) {
+    const labels = {
+        price_increased: 'Price increased', price_decreased: 'Price decreased',
+        new_product: 'New product', removed_product: 'Product removed',
+        back_in_stock: 'Back in stock', out_of_stock: 'Out of stock',
+    };
+    let line = labels[c.changeType] || c.changeType;
+    if (c.title) line += ` — ${c.title}`;
+    if (c.from != null) line += `: $${c.from} → $${c.to}${c.percent ? ` (${c.percent}%)` : ''}`;
+    return line;
+}
+
+async function sendAlertEmail(to, alerts) {
+    try {
+        const RESEND_KEY = typeof RESEND_API_KEY !== 'undefined' ? RESEND_API_KEY : null;
+        if (!RESEND_KEY) return false;
+        const total = alerts.reduce((n, a) => n + a.changes.length, 0);
+        const lines = alerts.map(a =>
+            `<h3 style="margin:16px 0 6px">${a.store}</h3>` +
+            a.changes.slice(0, 20).map(c => `<div style="padding:3px 0;color:#333">• ${describeChange(c)}</div>`).join('')
+        ).join('');
+        const html = `<div style="font:14px/1.6 -apple-system,Segoe UI,sans-serif;color:#111">
+<h2 style="margin:0 0 4px">Shopify competitor changes</h2>
+<div style="color:#666">${total} change(s) across ${alerts.length} store(s) · ${new Date().toISOString()}</div>
+${lines}
+<hr style="border:0;border-top:1px solid #eee;margin:18px 0">
+<div style="color:#888;font-size:12px">Shopify Change Intelligence · manage alerts in your <a href="https://shopify-intel.contentforge-press.workers.dev/dashboard">dashboard</a>.</div>
+</div>`;
+        const res = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: { 'authorization': `Bearer ${RESEND_KEY}`, 'content-type': 'application/json' },
+            body: JSON.stringify({
+                from: 'Shopify Change Intelligence <alerts@mail.contentforge.press>',
+                to: [to],
+                subject: `🛒 ${total} competitor change(s) on Shopify`,
+                html,
+            }),
+        });
+        return res.ok;
+    } catch (e) {
+        console.error('alert email failed:', String(e?.message || e));
+        return false;
+    }
+}
+
+async function handleWatchRefresh(url, request, env) {
+    const kv = env.INTEL_KV;
+    const key = url.searchParams.get('key');
+    const sub = await loadSubscription(kv, key);
+    if (!sub) return json({ error: 'invalid_key' }, 401);
+    if (!sub.active) return json({ error: 'subscription_expired', hint: 'renew at /pricing' }, 402);
+
+    const wl = await getWatchlist(kv, key);
+    const onlyStore = safeNorm(url.searchParams.get('store'));
+    await runWatchlistRefresh(kv, wl, onlyStore ? [onlyStore] : null);
+    await kv.put(`watch-${key}`, JSON.stringify(wl));
     return json(await watchView(kv, key));
+}
+
+// ---- Scheduled auto-refresh (Cloudflare Cron) -----------------------------
+async function scheduledScan(env) {
+    const kv = env.INTEL_KV;
+    let cursor;
+    let scanned = 0;
+    let refreshed = 0;
+    do {
+        const list = await kv.list({ prefix: 'watch-', cursor, limit: 100 });
+        for (const item of list.keys) {
+            // key format: watch-<accessKey>
+            const accessKey = item.name.slice('watch-'.length);
+            if (!accessKey.startsWith('sci_')) continue;
+            scanned++;
+            try {
+                const sub = await loadSubscription(kv, accessKey);
+                if (!sub || !sub.active) continue;
+                const wl = await getWatchlist(kv, accessKey);
+                if (!wl.stores.length) continue;
+                await runWatchlistRefresh(kv, wl, null);
+                await kv.put(`watch-${accessKey}`, JSON.stringify(wl));
+                refreshed++;
+            } catch (e) {
+                console.error('scheduled watch error:', accessKey, String(e?.message || e));
+            }
+        }
+        cursor = list.cursor;
+        // Safety: KV list and fetch budgets; cap work per invocation.
+        if (scanned >= 500) break;
+    } while (cursor);
+    console.log(`scheduled scan: ${scanned} watchlists, ${refreshed} refreshed`);
+    return { scanned, refreshed };
 }
 
 function renderEmbed() {
@@ -1824,6 +1931,9 @@ export default {
             console.error('unhandled:', String(err?.message || err));
             return withSecurity(json({ error: 'internal_error' }, 500));
         }
+    },
+    async scheduled(event, env, ctx) {
+        ctx.waitUntil(scheduledScan(env));
     },
 };
 
