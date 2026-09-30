@@ -1,5 +1,7 @@
 # Shopify Change Intelligence
 
+**English** · [简体中文](README.zh-CN.md)
+
 A **zero-dependency** Cloudflare Worker that monitors Shopify stores and sells change intelligence. AI agents pay automatically in **USDC on Base** via the native **x402** protocol — no platform account, no payment processor, 0% commission.
 
 **npm:** [`shopify-change-intelligence`](https://www.npmjs.com/package/shopify-change-intelligence) — `npx shopify-change-intelligence` prints the MCP client config for the hosted server.
