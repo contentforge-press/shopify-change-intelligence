@@ -4,7 +4,7 @@
 // change-diff costs USDC on Base, settled P2P to our own wallet.
 // ---------------------------------------------------------------------------
 
-const PAY_TO = '0x7B185414974006313E3A23C454fBAD34477FDC25';
+const PAY_TO = '0x4873108b2280b7f3EF8cD70cEca3aaBD385f8D6C';
 const FACILITATOR = 'https://x402.org/facilitator';
 const USDC_BASE = '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913';
 const CHAIN_ID = 8453;
