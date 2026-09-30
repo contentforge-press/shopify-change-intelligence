@@ -1,0 +1,40 @@
+{
+  "name": "shopify-change-intelligence",
+  "version": "1.0.0",
+  "description": "Remote MCP server to monitor any public Shopify store: free live snapshot, paid change intelligence (new/removed products, price moves, stock) and competitor reports in USDC via x402 on Base. Use npx shopify-change-intelligence to print client config.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "shopify",
+    "shopify-api",
+    "ecommerce",
+    "price-monitoring",
+    "competitive-intelligence",
+    "competitor-analysis",
+    "x402",
+    "usdc",
+    "ai-agents"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/contentforge-press/shopify-change-intelligence#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/contentforge-press/shopify-change-intelligence.git",
+    "directory": "npm"
+  },
+  "bugs": {
+    "url": "https://github.com/contentforge-press/shopify-change-intelligence/issues"
+  },
+  "bin": {
+    "shopify-change-intelligence": "bin.js"
+  },
+  "files": [
+    "bin.js",
+    "config.json",
+    "mcp.json",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  }
+}

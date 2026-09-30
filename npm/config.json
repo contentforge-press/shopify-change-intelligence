@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "shopify-change-intelligence": {
+      "type": "streamableHttp",
+      "url": "https://shopify-intel.contentforge-press.workers.dev/mcp"
+    }
+  }
+}
