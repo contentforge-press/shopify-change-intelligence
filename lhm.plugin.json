@@ -1,0 +1,84 @@
+{
+  "identifier": "contentforge-press-shopify-intel",
+  "name": "Shopify Change Intelligence",
+  "version": "1.1.0",
+  "description": "Ask any public Shopify store a question. Free live snapshot; paid change intelligence (new/removed products, price moves, stock) and competitor reports. AI agents pay in USDC on Base via x402.",
+  "category": "productivity",
+  "homepage": "https://github.com/contentforge-press/shopify-change-intelligence",
+  "cloudEndpoint": "https://shopify-intel.contentforge-press.workers.dev/mcp",
+  "icon": "🛍️",
+  "tags": [
+    "shopify",
+    "e-commerce",
+    "competitor-monitoring",
+    "price-tracking",
+    "market-research",
+    "x402",
+    "usdc"
+  ],
+  "localizations": [
+    {
+      "locale": "zh-CN",
+      "name": "Shopify 店铺变化情报",
+      "description": "向任何公开 Shopify 店铺提问。免费实时快照；付费获取变化情报（新品/下架、价格涨跌、库存）与竞品报告。AI Agent 通过 x402 用 Base 网络 USDC 自动付费。",
+      "tags": [
+        "shopify",
+        "电商",
+        "竞品监控",
+        "价格追踪",
+        "市场调研",
+        "x402"
+      ]
+    }
+  ],
+  "tools": [
+    {
+      "name": "shopify_snapshot",
+      "description": "FREE. Live snapshot of a public Shopify store: product count, price range, availability and a sample of products. Reads the public /products.json feed.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "store": { "type": "string", "description": "Shopify domain, e.g. allbirds.com" }
+        },
+        "required": ["store"]
+      }
+    },
+    {
+      "name": "shopify_changes",
+      "description": "PAID ($0.05 USDC on Base via x402). Change intelligence vs the last snapshot: new/removed products, price increases/decreases, restock/out-of-stock.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "store": { "type": "string", "description": "Shopify domain, e.g. allbirds.com" }
+        },
+        "required": ["store"]
+      }
+    },
+    {
+      "name": "shopify_intel_report",
+      "description": "PAID ($0.50 USDC on Base via x402). Full-catalog competitor intelligence report: price bands, median/range, top discounts and hikes, stock signals, executive takeaways.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "store": { "type": "string", "description": "Shopify domain, e.g. allbirds.com" }
+        },
+        "required": ["store"]
+      }
+    },
+    {
+      "name": "shopify_batch_watch",
+      "description": "PAID ($0.03 USDC per store on Base via x402, max 50). Watches a whole set of competitor Shopify stores in one call; returns per-store change counts.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "stores": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Shopify domains, e.g. [\"allbirds.com\",\"gymshark.com\"]"
+          }
+        },
+        "required": ["stores"]
+      }
+    }
+  ]
+}
