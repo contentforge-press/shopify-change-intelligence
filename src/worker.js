@@ -18,6 +18,92 @@ const json = (obj, status = 200, extra = {}) => new Response(JSON.stringify(obj)
     headers: { 'content-type': 'application/json', ...extra },
 });
 
+function renderHome() {
+    const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Shopify Change Intelligence — x402</title>
+<style>
+  :root{--bg:#0b0e14;--card:#141925;--line:#222a3a;--fg:#e8ecf4;--mut:#8b95a7;--acc:#5b8cff;--grn:#37d39b}
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg)}
+  .wrap{max-width:880px;margin:0 auto;padding:48px 22px}
+  h1{font-size:30px;margin:0 0 6px}
+  .sub{color:var(--mut);margin:0 0 30px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:22px;margin:18px 0}
+  label{display:block;color:var(--mut);font-size:13px;margin-bottom:8px}
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  input{flex:1;min-width:240px;background:#0d1119;border:1px solid var(--line);border-radius:9px;color:var(--fg);padding:12px 14px;font-size:15px}
+  button{background:var(--acc);border:0;color:#fff;border-radius:9px;padding:12px 18px;font-size:15px;cursor:pointer;font-weight:600}
+  button.ghost{background:transparent;border:1px solid var(--line);color:var(--fg)}
+  pre{background:#0a0d14;border:1px solid var(--line);border-radius:9px;padding:14px;overflow:auto;font-size:12.5px;max-height:340px}
+  code{color:var(--grn)}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:680px){.grid{grid-template-columns:1fr}}
+  .pill{display:inline-block;font-size:12px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:2px 10px;margin-right:6px}
+  a{color:var(--acc)}
+  .muted{color:var(--mut);font-size:13.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Shopify Change Intelligence</h1>
+  <p class="sub">Ask any Shopify store a question. The basic answer is free &nbsp;·&nbsp; the full change report is paid by AI agents in <b>USDC on Base</b> via <b>x402</b> — no signup, no processor.</p>
+
+  <div class="card">
+    <label for="store">Try it free — enter a Shopify store domain</label>
+    <div class="row">
+      <input id="store" value="allbirds.com" placeholder="e.g. allbirds.com" />
+      <button onclick="run()">Get free snapshot</button>
+    </div>
+    <p class="muted" style="margin:14px 0 0">Reads the public <code>/products.json</code> feed. Live count, price range, availability.</p>
+    <pre id="out">// result will appear here</pre>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <b>Free endpoint</b>
+      <p class="muted">Live catalog snapshot</p>
+      <code>GET /v1/snapshot?store=allbirds.com</code>
+    </div>
+    <div class="card">
+      <b>Paid endpoint · $0.05 USDC</b>
+      <p class="muted">New / removed products, price up/down, restock / out-of-stock vs. history</p>
+      <code>GET /v1/changes?store=allbirds.com</code>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>How agents pay</b>
+    <p class="muted">Without payment the server returns <code>402</code> with a <code>PAYMENT-REQUIRED</code> header. An x402 agent settles USDC on Base and retries; the worker verifies and settles P2P — 0% commission.</p>
+    <div>
+      <span class="pill">network · Base (8453)</span>
+      <span class="pill">asset · USDC</span>
+      <span class="pill">payout · ${PAY_TO.slice(0,6)}…${PAY_TO.slice(-4)}</span>
+    </div>
+  </div>
+
+  <p class="muted"><a href="/health">health</a> · <a href="/v1">JSON manifest</a></p>
+</div>
+<script>
+async function run(){
+  const out=document.getElementById('out');
+  const store=encodeURIComponent(document.getElementById('store').value.trim());
+  out.textContent='// loading…';
+  try{
+    const r=await fetch('/v1/snapshot?store='+store);
+    const j=await r.json();
+    out.textContent=JSON.stringify(j,null,2);
+  }catch(e){ out.textContent='// error: '+e.message; }
+}
+</script>
+</body>
+</html>`;
+    return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+}
+
 const normDomain = (raw) => String(raw ?? '')
     .trim().toLowerCase()
     .replace(/^https?:\/\//, '')
@@ -180,11 +266,15 @@ async function verifyAndSettle(paymentHeader, requirements) {
 }
 
 // ---- Route handlers -------------------------------------------------------
-async function handleSnapshot(url) {
+async function handleSnapshot(url, env) {
     const store = normDomain(url.searchParams.get('store'));
     if (!store) return json({ error: 'Missing ?store= domain' }, 400);
     try {
         const products = await fetchProducts(store, FREE_MAX_PRODUCTS);
+        // Free snapshot also establishes/refreshes the baseline so the next
+        // paid /v1/changes call diffs against real history instead of empty.
+        const kv = env.INTEL_KV;
+        if (kv) await kv.put(`snapshot-${store}`, JSON.stringify({ savedAt: new Date().toISOString(), products }));
         return json({
             store,
             fetchedAt: new Date().toISOString(),
@@ -253,7 +343,8 @@ export default {
         const url = new URL(request.url);
         const { pathname } = url;
 
-        if (pathname === '/' || pathname === '/v1') {
+        if (pathname === '/') return renderHome();
+        if (pathname === '/v1') {
             return json({
                 service: 'Shopify Change Intelligence',
                 chain: `Base (chainId ${CHAIN_ID})`,
@@ -267,7 +358,7 @@ export default {
             });
         }
         if (pathname === '/health') return json({ ok: true, time: new Date().toISOString() });
-        if (pathname === '/v1/snapshot') return handleSnapshot(url);
+        if (pathname === '/v1/snapshot') return handleSnapshot(url, env);
         if (pathname === '/v1/changes') return handleChanges(url, request, env);
 
         return json({ error: 'not_found' }, 404);
