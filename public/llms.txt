@@ -1,0 +1,17 @@
+# Shopify Change Intelligence
+
+> Monitor any public Shopify store. Free live snapshot; paid change intelligence and competitor reports in USDC via x402 on Base.
+
+- Endpoint (MCP, Streamable HTTP): https://shopify-intel.contentforge-press.workers.dev/mcp
+- Free snapshot: https://shopify-intel.contentforge-press.workers.dev/v1/snapshot?store=allbirds.com
+- x402 discovery: https://shopify-intel.contentforge-press.workers.dev/.well-known/x402
+- Embed a free store widget: https://shopify-intel.contentforge-press.workers.dev/embed
+
+## Tools (MCP)
+- shopify_snapshot: free live catalog snapshot (product count, price range, stock)
+- shopify_changes: $0.05 — new/removed products, price moves, restock/out-of-stock vs history
+- shopify_intel_report: $0.50 — full-catalog competitor report with takeaways
+- shopify_batch_watch: $0.03 per store — watch up to 50 stores in one call
+- shopify_landscape: $5 — strategic competitive landscape across up to 10 stores
+
+Paid tools settle USDC on Base using x402; no API key or account needed to discover or call.

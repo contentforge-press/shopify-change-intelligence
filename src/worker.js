@@ -18,6 +18,118 @@ const BATCH_MAX_STORES = 50;
 const PRICE_LANDSCAPE_USD = 5;
 const LANDSCAPE_MAX_STORES = 10;
 const ADMIN_KEY = 'ba951afdb936eecd4ffb9ddfb1b44b25f47bbab1dfc391ac';
+const ROBOTS_TXT = "User-agent: *\nAllow: /\nDisallow: /v1/admin/\n\nSitemap: https://shopify-intel.contentforge-press.workers.dev/sitemap.xml\n";
+const LLMS_TXT = "# Shopify Change Intelligence\n\n> Monitor any public Shopify store. Free live snapshot; paid change intelligence and competitor reports in USDC via x402 on Base.\n\n- Endpoint (MCP, Streamable HTTP): https://shopify-intel.contentforge-press.workers.dev/mcp\n- Free snapshot: https://shopify-intel.contentforge-press.workers.dev/v1/snapshot?store=allbirds.com\n- x402 discovery: https://shopify-intel.contentforge-press.workers.dev/.well-known/x402\n- Embed a free store widget: https://shopify-intel.contentforge-press.workers.dev/embed\n\n## Tools (MCP)\n- shopify_snapshot: free live catalog snapshot (product count, price range, stock)\n- shopify_changes: $0.05 — new/removed products, price moves, restock/out-of-stock vs history\n- shopify_intel_report: $0.50 — full-catalog competitor report with takeaways\n- shopify_batch_watch: $0.03 per store — watch up to 50 stores in one call\n- shopify_landscape: $5 — strategic competitive landscape across up to 10 stores\n\nPaid tools settle USDC on Base using x402; no API key or account needed to discover or call.\n";
+const SITEMAP_XML = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n  <url><loc>https://shopify-intel.contentforge-press.workers.dev/</loc></url>\n  <url><loc>https://shopify-intel.contentforge-press.workers.dev/embed</loc></url>\n  <url><loc>https://shopify-intel.contentforge-press.workers.dev/mcp</loc></url>\n</urlset>\n";
+
+const WIDGET_JS = `/*! Shopify Change Intelligence — embeddable store widget | MIT */
+(function () {
+  'use strict';
+  var API = 'https://shopify-intel.contentforge-press.workers.dev';
+  var css = ''
+    + '.sci-card{font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;'
+    + 'background:#fff;color:#16202e;border:1px solid #e3e8ef;border-radius:14px;'
+    + 'padding:16px;max-width:320px;box-sizing:border-box}'
+    + '.sci-card *{box-sizing:border-box}'
+    + '.sci-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}'
+    + '.sci-store{font-weight:700;font-size:14px;word-break:break-all}'
+    + '.sci-dot{width:8px;height:8px;border-radius:50%;background:#22c55e;flex:none}'
+    + '.sci-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}'
+    + '.sci-stat{background:#f6f8fb;border:1px solid #eef1f6;border-radius:10px;padding:8px 10px}'
+    + '.sci-num{font-size:18px;font-weight:700;line-height:1.2}'
+    + '.sci-lbl{font-size:11px;color:#667085;margin-top:1px}'
+    + '.sci-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;'
+    + 'border-top:1px solid #eef1f6;padding-top:10px;font-size:12px}'
+    + '.sci-foot a{color:#2f6fed;text-decoration:none;font-weight:600}'
+    + '.sci-alert{color:#2f6fed;text-decoration:none;font-weight:600}'
+    + '.sci-err{font-size:13px;color:#b42318}';
+
+  function inject() {
+    if (document.getElementById('sci-style')) return;
+    var s = document.createElement('style');
+    s.id = 'sci-style';
+    s.textContent = css;
+    (document.head || document.documentElement).appendChild(s);
+  }
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text != null) n.textContent = text;
+    return n;
+  }
+
+  function render(host, d) {
+    host.innerHTML = '';
+    if (d.error) {
+      host.appendChild(el('div', 'sci-err', 'Live store data unavailable.'));
+      return;
+    }
+    var card = el('div', 'sci-card');
+    var head = el('div', 'sci-head');
+    var name = el('div', 'sci-store', d.store);
+    head.appendChild(name);
+    head.appendChild(el('span', 'sci-dot'));
+    card.appendChild(head);
+
+    var grid = el('div', 'sci-grid');
+    [
+      [d.productCount, 'products'],
+      [d.inStock, 'in stock'],
+      [d.outOfStock, 'out of stock'],
+      ['$' + (d.minPrice != null ? d.minPrice : '–'), 'from'],
+    ].forEach(function (p) {
+      var st = el('div', 'sci-stat');
+      st.appendChild(el('div', 'sci-num', p[0]));
+      st.appendChild(el('div', 'sci-lbl', p[1]));
+      grid.appendChild(st);
+    });
+    card.appendChild(grid);
+
+    var foot = el('div', 'sci-foot');
+    var powered = document.createElement('a');
+    powered.href = API + '/?utm_source=widget&utm_medium=embed&utm_store=' + encodeURIComponent(d.store);
+    powered.target = '_blank';
+    powered.rel = 'noopener';
+    powered.textContent = 'Shopify Change Intelligence';
+    foot.appendChild(powered);
+    var alert = document.createElement('a');
+    alert.className = 'sci-alert';
+    alert.href = API + '/?utm_source=widget&utm_medium=cta&utm_store=' + encodeURIComponent(d.store);
+    alert.target = '_blank';
+    alert.rel = 'noopener';
+    alert.textContent = 'Get change alerts →';
+    foot.appendChild(alert);
+    card.appendChild(foot);
+    host.appendChild(card);
+  }
+
+  function loadOne(host) {
+    var store = host.getAttribute('data-store');
+    if (!store) return;
+    fetch(API + '/v1/widget-data?store=' + encodeURIComponent(store))
+      .then(function (r) { return r.json(); })
+      .then(function (d) { render(host, d); })
+      .catch(function () { render(host, { error: true }); });
+  }
+
+  function init() {
+    inject();
+    var nodes = document.querySelectorAll('.sci-widget:not([data-sci-done])');
+    for (var i = 0; i < nodes.length; i++) {
+      nodes[i].setAttribute('data-sci-done', '1');
+      loadOne(nodes[i]);
+    }
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
+})();
+`;
+
 
 // Full-catalog fetch cap for paid tiers (0 = all pages).
 const FULL_CAP = 0;
@@ -467,6 +579,39 @@ async function verifyAndSettle(paymentHeader, requirements) {
     const settle = await settleRes.json();
     if (!settle.success) return { ok: false, reason: settle.errorReason || 'unexpected_settle_error' };
     return { ok: true, payer: settle.payer, transaction: settle.transaction };
+}
+
+// ---- Embeddable widget (CORS-open compact data) ---------------------------
+function cors(response) {
+    response.headers.set('Access-Control-Allow-Origin', '*');
+    response.headers.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    response.headers.set('Access-Control-Allow-Headers', 'content-type');
+    return response;
+}
+
+async function handleWidgetData(url, request, env) {
+    const store = safeNorm(url.searchParams.get('store'));
+    if (!store) return cors(json({ error: 'invalid_store' }, 400));
+    try {
+        const products = await fetchProducts(store, FREE_MAX_PRODUCTS);
+        const prices = products.flatMap((p) => p.variants.map((v) => v.price).filter((x) => x > 0));
+        const inStock = products.filter((p) => p.variants.some((v) => v.available)).length;
+        const payload = {
+            store,
+            productCount: products.length,
+            inStock,
+            outOfStock: products.length - inStock,
+            minPrice: prices.length ? Math.min(...prices) : null,
+            maxPrice: prices.length ? Math.max(...prices) : null,
+            updatedAt: new Date().toISOString(),
+        };
+        const res = cors(json(payload));
+        res.headers.set('Cache-Control', 'public, max-age=300');
+        if (env.INTEL_KV) env.INTEL_KV.put(`snapshot-${store}`, JSON.stringify({ savedAt: new Date().toISOString(), products })).catch(() => {});
+        return res;
+    } catch (e) {
+        return cors(json({ error: 'fetch_failed', store }, 502));
+    }
 }
 
 // ---- Route handlers -------------------------------------------------------
@@ -991,6 +1136,45 @@ function renderGlama() {
     });
 }
 
+function renderEmbed() {
+    const snippet = '<div class="sci-widget" data-store="allbirds.com"></div>\n<script async src="https://shopify-intel.contentforge-press.workers.dev/widget.js"><\/script>';
+    return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Embed the free Shopify store widget</title>
+<style>
+:root{--bg:#0b0e14;--card:#141925;--line:#222a3a;--fg:#e8ecf4;--mut:#8b95a7;--acc:#5b8cff}
+body{margin:0;font:15px/1.6 -apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--fg)}
+.wrap{max-width:860px;margin:0 auto;padding:44px 20px}
+h1{font-size:25px;margin:0 0 6px}.sub{color:var(--mut);font-size:14px;margin-bottom:24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin:16px 0}
+.card h2{font-size:13px;color:var(--mut);text-transform:uppercase;letter-spacing:.06em;margin:0 0 12px}
+pre{background:#0d1119;border:1px solid var(--line);border-radius:10px;padding:14px;overflow:auto;font-size:13px;color:#cdd6e6}
+.flex{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+.note{color:var(--mut);font-size:13px}
+a{color:#9db8ff}
+@media(max-width:720px){.flex{grid-template-columns:1fr}}
+</style></head><body><div class="wrap">
+<h1>Free Shopify store widget</h1>
+<div class="sub">Show live product, price and stock stats on any page — one snippet, auto-updating, free.</div>
+<div class="flex">
+  <div class="card">
+    <h2>Preview</h2>
+    <div class="sci-widget" data-store="allbirds.com"></div>
+  </div>
+  <div class="card">
+    <h2>Paste this where you want it</h2>
+    <pre id="snip"></pre>
+    <div class="note">Replace <code>data-store</code> with your own domain. No signup required.</div>
+  </div>
+</div>
+<p class="note"><a href="/">← Back to Shopify Change Intelligence</a></p>
+</div>
+<script>document.getElementById('snip').textContent=${JSON.stringify(snippet)};</script>
+<script async src="/widget.js"></script>
+</body></html>`;
+}
+
 function renderWellKnown() {
     return json({
         x402Version: 1,
@@ -1106,6 +1290,12 @@ async function handle(request, env) {
         if (pathname === '/.well-known/x402') return renderWellKnown();
         if (pathname === '/.well-known/glama.json') return renderGlama();
         if (pathname === '/mcp') return handleMcp(request, env);
+        if (pathname === '/robots.txt') return new Response(ROBOTS_TXT, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
+        if (pathname === '/llms.txt') return new Response(LLMS_TXT, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
+        if (pathname === '/sitemap.xml') return new Response(SITEMAP_XML, { headers: { 'content-type': 'application/xml; charset=utf-8' } });
+        if (pathname === '/widget.js') return new Response(WIDGET_JS, { headers: { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'public, max-age=600' } });
+        if (pathname === '/embed') return new Response(renderEmbed(), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+        if (pathname === '/v1/widget-data') return handleWidgetData(url, request, env);
         if (pathname === '/v1/snapshot') return handleSnapshot(url, request, env);
         if (pathname === '/v1/changes') return handleChanges(url, request, env);
         if (pathname === '/v1/intel') return handleIntel(url, request, env);
