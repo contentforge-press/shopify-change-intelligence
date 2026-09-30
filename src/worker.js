@@ -15,6 +15,8 @@ const PRICE_DEEP_USD = 0.05;
 const PRICE_INTEL_USD = 0.50;
 const PRICE_PER_STORE_USD = 0.03;
 const BATCH_MAX_STORES = 50;
+const PRICE_LANDSCAPE_USD = 5;
+const LANDSCAPE_MAX_STORES = 10;
 
 // Full-catalog fetch cap for paid tiers (0 = all pages).
 const FULL_CAP = 0;
@@ -366,6 +368,62 @@ function buildIntelReport(store, products, changes, prev, baselineTime, fetchedA
     };
 }
 
+// ---- Landscape: compare several competitors in one strategic answer ------
+function buildLandscapeReport(stores, perStore, anchor, generatedAt) {
+    // perStore: {store, products, median, min, max, inStock, outOfStock, changes}
+    const rows = perStore.map((s) => ({
+        store: s.store,
+        productCount: s.products.length,
+        medianPrice: s.median,
+        minPrice: s.min,
+        maxPrice: s.max,
+        inStock: s.inStock,
+        outOfStock: s.outOfStock,
+        outOfStockPct: s.products.length ? Number(((s.outOfStock / s.products.length) * 100).toFixed(1)) : null,
+        recentChanges: s.changeCount,
+    })).sort((a, b) => (b.medianPrice ?? -1) - (a.medianPrice ?? -1));
+
+    const medians = perStore.map((s) => s.median).filter((x) => x !== null);
+    const marketMedian = median(medians);
+
+    // Position the anchor store against the market.
+    const anchorRow = rows.find((r) => r.store === anchor) || null;
+    let position = null;
+    const takeaways = [];
+    if (anchorRow && anchorRow.medianPrice !== null) {
+        const cheaper = rows.filter((r) => r.medianPrice !== null && r.medianPrice < anchorRow.medianPrice).length;
+        const pricier = rows.filter((r) => r.medianPrice !== null && r.medianPrice > anchorRow.medianPrice).length;
+        position = { anchor, medianPrice: anchorRow.medianPrice, cheaperCompetitors: cheaper, pricierCompetitors: pricier };
+        const deltaPct = marketMedian ? Number((((anchorRow.medianPrice - marketMedian) / (marketMedian || 1)) * 100).toFixed(1)) : null;
+        if (deltaPct !== null) {
+            takeaways.push(`${anchor} median is $${anchorRow.medianPrice.toFixed(2)}, ${Math.abs(deltaPct)}% ${deltaPct >= 0 ? 'above' : 'below'} the peer median of $${marketMedian.toFixed(2)}.`);
+        }
+    }
+    takeaways.push(`Across ${stores.length} stores the median price is $${marketMedian !== null ? marketMedian.toFixed(2) : 'n/a'}; the spread runs $${Math.min(...perStore.map((s) => s.min).filter((x) => x !== null)).toFixed(0)}–$${Math.max(...perStore.map((s) => s.max).filter((x) => x !== null)).toFixed(0)}.`);
+
+    const cheapest = rows.filter((r) => r.medianPrice !== null).slice(-1)[0];
+    const premium = rows[0];
+    if (cheapest) takeaways.push(`Lowest-positioned: ${cheapest.store} (median $${cheapest.medianPrice.toFixed(2)}).`);
+    if (premium) takeaways.push(`Premium-positioned: ${premium.store} (median $${premium.medianPrice.toFixed(2)}).`);
+    const highOos = rows.filter((r) => r.outOfStockPct !== null && r.outOfStockPct > 25);
+    if (highOos.length) takeaways.push(`${highOos.map((r) => r.store).join(', ')} show >25% out-of-stock — possible clearance or supply stress.`);
+    const movers = perStore.filter((s) => s.changeCount > 0).sort((a, b) => b.changeCount - a.changeCount);
+    if (movers.length) takeaways.push(`Most active on pricing/stock lately: ${movers.slice(0, 3).map((s) => `${s.store} (${s.changeCount})`).join(', ')}.`);
+
+    return {
+        report: 'shopify_competitive_landscape',
+        generatedAt,
+        anchor,
+        storesCompared: stores.length,
+        market: { medianPrice: marketMedian },
+        anchorPosition: position,
+        competitors: rows,
+        executiveTakeaways: takeaways,
+    };
+}
+
+const medianPriceSafe = (x) => (x === 0 ? 1 : x);
+
 // ---- x402 -----------------------------------------------------------------
 function buildRequirements(url, priceUsd, description) {
     const atomic = BigInt(Math.round(priceUsd * 1_000_000)).toString();
@@ -581,6 +639,60 @@ async function handleBatch(url, request, env) {
     });
 }
 
+async function handleLandscape(url, request, env) {
+    let parsed = {};
+    if (request.method === 'POST') {
+        try { parsed = await request.json(); } catch { parsed = {}; }
+    }
+    const anchor = safeNorm(parsed.anchor || url.searchParams.get('anchor'));
+    let rawStores = parsed.stores;
+    if (!Array.isArray(rawStores)) {
+        const q = url.searchParams.get('stores') || '';
+        rawStores = q ? q.split(',') : [];
+    }
+    const stores = [...new Set(rawStores.map(safeNorm))].filter(Boolean);
+    if (!stores.length) return json({ error: 'missing_stores', hint: 'provide stores[] (max ' + LANDSCAPE_MAX_STORES + ')' }, 400);
+    if (stores.length > LANDSCAPE_MAX_STORES) return json({ error: 'too_many_stores', max: LANDSCAPE_MAX_STORES }, 400);
+    const useAnchor = anchor && stores.includes(anchor) ? anchor : stores[0];
+
+    if (request.headers.get('PAYMENT')) {
+        const requirements = buildRequirements(url.href, PRICE_LANDSCAPE_USD, `Competitive landscape across ${stores.length} Shopify stores`);
+        const settle = await verifyAndSettle(request.headers.get('PAYMENT'), requirements);
+        if (!settle.valid) return json({ error: 'payment_invalid', reason: settle.reason }, 402);
+    } else {
+        const requirements = buildRequirements(url.href, PRICE_LANDSCAPE_USD, `Competitive landscape across ${stores.length} Shopify stores`);
+        return paymentRequired(requirements);
+    }
+
+    const perStore = await Promise.all(stores.map(async (store) => {
+        try {
+            const products = await fetchProducts(store, 0);
+            const prices = products.flatMap((p) => p.variants.map((v) => v.price).filter((x) => x > 0));
+            const prev = await env.INTEL_KV.get(`snapshot-${store}`);
+            let changes = [];
+            if (prev) {
+                const prevObj = JSON.parse(prev);
+                changes = diffProducts(prevObj.products, products);
+            }
+            await env.INTEL_KV.put(`snapshot-${store}`, JSON.stringify({ savedAt: new Date().toISOString(), store, products }));
+            return {
+                store, products,
+                median: median(prices), min: prices.length ? Math.min(...prices) : null, max: prices.length ? Math.max(...prices) : null,
+                inStock: products.filter((p) => p.variants.some((v) => v.available)).length,
+                outOfStock: products.filter((p) => p.variants.every((v) => !v.available)).length,
+                changeCount: changes.length,
+            };
+        } catch (e) {
+            return { store, products: [], median: null, min: null, max: null, inStock: 0, outOfStock: 0, changeCount: 0, error: e.message };
+        }
+    }));
+
+    const report = buildLandscapeReport(stores, perStore, useAnchor, new Date().toISOString());
+    report.paid = true;
+    report.priceUsd = PRICE_LANDSCAPE_USD;
+    return json(report);
+}
+
 async function handleMcp(request, env) {
     if (request.method === 'GET') return json({ jsonrpc: '2.0', error: { code: -32000, message: 'MCP endpoint expects POST' } }, 405);
 
@@ -645,6 +757,18 @@ async function handleMcp(request, env) {
                         required: ['stores'],
                     },
                 },
+                {
+                    name: 'shopify_landscape',
+                    description: `PAID ($${PRICE_LANDSCAPE_USD} USDC on Base via x402, up to ${LANDSCAPE_MAX_STORES} stores). Strategic competitive landscape: positions an anchor store against competitors by median price, flags premium/value players, price-war signals and stock anomalies.`,
+                    inputSchema: {
+                        type: 'object',
+                        properties: {
+                            stores: { type: 'array', items: { type: 'string' }, description: 'Competitor Shopify domains, up to 10' },
+                            anchor: { type: 'string', description: 'Your store domain to position against peers' },
+                        },
+                        required: ['stores'],
+                    },
+                },
             ],
         });
     }
@@ -673,6 +797,31 @@ async function handleMcp(request, env) {
             if (pr) outHeaders['PAYMENT-REQUIRED'] = pr;
             if (res.status === 402 && !payH) {
                 return toolText(`This tool costs $${price} USDC on Base via x402 (${stores.length} stores × $${PRICE_PER_STORE_USD}). Pay to ${PAY_TO} and retry carrying the PAYMENT header.`, true, outHeaders);
+            }
+            return toolText(txt, res.status >= 400, outHeaders);
+        }
+
+        if (name === 'shopify_landscape') {
+            const rawStores = params?.arguments?.stores;
+            const stores = [...new Set((Array.isArray(rawStores) ? rawStores : []).map(safeNorm).filter(Boolean))];
+            if (!stores.length) return rerr(-32602, 'Missing required argument: stores (non-empty array)');
+            if (stores.length > LANDSCAPE_MAX_STORES) return rerr(-32602, `Up to ${LANDSCAPE_MAX_STORES} stores per call`);
+            const anchor = safeNorm(params?.arguments?.anchor) || stores[0];
+            const reqHeaders = { 'content-type': 'application/json' };
+            const payH = request.headers.get('PAYMENT') || request.headers.get('X-PAYMENT');
+            if (payH) reqHeaders.PAYMENT = payH;
+            const sub = new Request(new URL(request.url).href, {
+                method: 'POST',
+                headers: reqHeaders,
+                body: JSON.stringify({ stores, anchor }),
+            });
+            const res = await handleLandscape(new URL(request.url), sub, env);
+            const txt = await res.text();
+            const outHeaders = {};
+            const pr = res.headers.get('PAYMENT-REQUIRED');
+            if (pr) outHeaders['PAYMENT-REQUIRED'] = pr;
+            if (res.status === 402 && !payH) {
+                return toolText(`This tool costs $${PRICE_LANDSCAPE_USD} USDC on Base via x402 and compares up to ${LANDSCAPE_MAX_STORES} stores. Pay to ${PAY_TO} and retry with the PAYMENT header.`, true, outHeaders);
             }
             return toolText(txt, res.status >= 400, outHeaders);
         }
@@ -836,6 +985,14 @@ function renderWellKnown() {
                 price: `${PRICE_PER_STORE_USD} USDC per store`,
                 scheme: 'exact',
             },
+            {
+                url: '/v1/landscape',
+                description: 'POST {stores:[...],anchor} — strategic competitive landscape across up to 10 stores: positioning, premium/value players, price-war and stock signals.',
+                method: 'POST',
+                mimeType: 'application/json',
+                price: `${PRICE_LANDSCAPE_USD} USDC`,
+                scheme: 'exact',
+            },
         ],
     });
 }
@@ -882,6 +1039,7 @@ async function handle(request, env) {
                     changes: '/v1/changes?store=allbirds.com',
                     intel: '/v1/intel?store=allbirds.com',
                     batch: 'POST /v1/batch {stores:[...]}',
+                    landscape: 'POST /v1/landscape {stores:[...],anchor}',
                     health: '/health',
                 },
                 pricing: {
@@ -889,6 +1047,7 @@ async function handle(request, env) {
                     changes: `$${PRICE_DEEP_USD} USDC`,
                     intelReport: `$${PRICE_INTEL_USD} USDC`,
                     batch: `$${PRICE_PER_STORE_USD} USDC per store (max ${BATCH_MAX_STORES})`,
+                    landscape: `$${PRICE_LANDSCAPE_USD} USDC (up to ${LANDSCAPE_MAX_STORES} stores)`,
                 },
             });
         }
@@ -900,6 +1059,7 @@ async function handle(request, env) {
         if (pathname === '/v1/changes') return handleChanges(url, request, env);
         if (pathname === '/v1/intel') return handleIntel(url, request, env);
         if (pathname === '/v1/batch') return handleBatch(url, request, env);
+        if (pathname === '/v1/landscape') return handleLandscape(url, request, env);
 
     return json({ error: 'not_found' }, 404);
 }

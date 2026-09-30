@@ -79,6 +79,22 @@
         },
         "required": ["stores"]
       }
+    },
+    {
+      "name": "shopify_landscape",
+      "description": "PAID ($5 USDC on Base via x402, up to 10 stores). Strategic competitive landscape: positions an anchor store against competitors by median price, flags premium/value players, price-war and stock signals.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "stores": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Competitor Shopify domains, up to 10"
+          },
+          "anchor": { "type": "string", "description": "Your store domain to position against peers" }
+        },
+        "required": ["stores"]
+      }
     }
   ]
 }
