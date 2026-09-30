@@ -208,6 +208,17 @@ function renderHome() {
     <code>POST /v1/batch&nbsp;&nbsp;{"stores":["allbirds.com","gymshark.com","…"]}</code>
   </div>
 
+  <div class="card" style="border-color:var(--acc)">
+    <b>Strategy · $5 USDC ⭐</b>
+    <p class="muted">Competitive landscape across up to ${LANDSCAPE_MAX_STORES} stores — positions your store against peers, flags premium/value players, price-war and stock signals.</p>
+    <code>POST /v1/landscape&nbsp;&nbsp;{"stores":[…],"anchor":"yourstore.com"}</code>
+  </div>
+
+  <div class="card">
+    <b>Free embeddable widget</b>
+    <p class="muted">Show live product, price and stock stats on any page — one snippet, auto-updating. <a href="/embed">Get the embed code →</a></p>
+  </div>
+
   <div class="card">
     <b>How agents pay</b>
     <p class="muted">Without payment the server returns <code>402</code> with a <code>PAYMENT-REQUIRED</code> header. An x402 agent settles USDC on Base and retries; the worker verifies and settles P2P — 0% commission.</p>
@@ -218,7 +229,7 @@ function renderHome() {
     </div>
   </div>
 
-  <p class="muted"><a href="/health">health</a> · <a href="/v1">JSON manifest</a></p>
+  <p class="muted"><a href="/health">health</a> · <a href="/v1">JSON manifest</a> · <a href="/embed">embed widget</a> · <a href="/llms.txt">llms.txt</a></p>
 </div>
 <script>
 async function run(){
