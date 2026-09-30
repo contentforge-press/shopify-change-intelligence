@@ -1,6 +1,6 @@
 {
   "name": "shopify-change-intelligence",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Remote MCP server to monitor any public Shopify store: free live snapshot, paid change intelligence (new/removed products, price moves, stock) and competitor reports in USDC via x402 on Base. Use npx shopify-change-intelligence to print client config.",
   "keywords": [
     "mcp",
@@ -36,5 +36,6 @@
   ],
   "engines": {
     "node": ">=18"
-  }
+  },
+  "mcpName": "io.github.contentforge-press/shopify-intel"
 }

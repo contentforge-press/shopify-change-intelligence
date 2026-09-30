@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.contentforge-press/shopify-intel",
+  "title": "Shopify Change Intelligence",
+  "description": "Monitor public Shopify stores: free snapshot, paid change intel, competitor reports via x402 USDC.",
+  "version": "1.0.2",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://shopify-intel.contentforge-press.workers.dev/mcp"
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "shopify-change-intelligence",
+      "version": "1.0.2",
+      "transport": {
+        "type": "streamable-http",
+        "url": "https://shopify-intel.contentforge-press.workers.dev/mcp"
+      }
+    }
+  ]
+}
