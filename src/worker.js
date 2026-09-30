@@ -1147,6 +1147,78 @@ function renderGlama() {
     });
 }
 
+const LEGAL_CSS = `
+:root{--bg:#0b0e14;--card:#141925;--line:#222a3a;--fg:#e8ecf4;--mut:#8b95a7;--acc:#5b8cff}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.6 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:var(--bg);color:var(--fg)}
+.wrap{max-width:820px;margin:0 auto;padding:48px 22px}
+h1{font-size:28px;margin:0 0 4px}
+h2{font-size:18px;margin:28px 0 6px}
+p,li{color:#c6cdda}
+.muted{color:var(--mut);font-size:13.5px}
+a{color:var(--acc)}
+hr{border:0;border-top:1px solid var(--line);margin:30px 0}`;
+
+function legalPage(title, bodyHtml) {
+    return `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${title} · Shopify Change Intelligence</title><style>${LEGAL_CSS}</style></head>
+<body><div class="wrap">
+<h1>${title}</h1>
+<p class="muted">Last updated: 2026-09-30 · <a href="/">Home</a> · <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · <a href="/contact">Contact</a></p>
+${bodyHtml}
+<hr><p class="muted">Shopify Change Intelligence — public-store data monitoring for AI agents. <a href="/">Back to home</a></p>
+</div></body></html>`;
+}
+
+function renderPrivacy() {
+    return legalPage('Privacy Policy', `
+<h2>What we collect</h2>
+<ul>
+<li><b>Queries you send:</b> the public store domain you request and the resulting catalog metadata (product titles, prices, availability) fetched from that public storefront.</li>
+<li><b>Technical logs:</b> request timestamps, client type, and HTTP status codes, used for rate limiting, abuse prevention and service reliability.</li>
+<li><b>Payments:</b> settled peer-to-peer in USDC on Base through the x402 protocol. We do <b>not</b> collect, see or store cards, bank details, passwords or personal billing information. On-chain transactions are recorded on the public Base ledger.</li>
+</ul>
+<h2>What we do not do</h2>
+<ul>
+<li>We do not sell personal data, run advertising trackers, or require accounts for API use.</li>
+<li>We only read data that stores already expose publicly to any visitor.</li>
+</ul>
+<h2>How data is used &amp; retained</h2>
+<p>Data is used solely to provide and improve the service, prevent abuse, and compute change history. Historical snapshots are retained as needed to deliver change detection and may be deleted on request.</p>
+<h2>Your rights &amp; contact</h2>
+<p>To request access, correction or deletion of data associated with your requests, contact <a href="mailto:contentforge.press@outlook.com">contentforge.press@outlook.com</a>. See also our <a href="/contact">contact page</a>.</p>`);
+}
+
+function renderTerms() {
+    return legalPage('Terms of Service', `
+<h2>The service</h2>
+<p>Shopify Change Intelligence provides monitoring of data published on <b>public Shopify storefronts</b>, exposed over HTTP and MCP. Use is offered on a pay-per-result basis for paid tiers; free tiers are provided as-is.</p>
+<h2>Acceptable use</h2>
+<ul>
+<li>You agree to use the service lawfully and not to attempt unauthorized access, disruption, circumvention of rate limits/payments, or extraction of non-public data.</li>
+<li>Requests are validated to block access to internal or private network resources.</li>
+</ul>
+<h2>No warranty</h2>
+<p>All data is sourced from third-party public stores and is provided "as is", without warranties of accuracy, completeness or fitness for a particular purpose. You are responsible for decisions made using the data.</p>
+<h2>Limitation of liability</h2>
+<p>To the maximum extent permitted by law, the service shall not be liable for any indirect, incidental or consequential damages arising from use or inability to use the service.</p>
+<h2>Payments</h2>
+<p>Paid requests are settled in USDC on Base via x402 and are generally non-refundable once the result has been delivered. If a result fails to deliver despite settlement, contact us for resolution.</p>
+<h2>Changes</h2>
+<p>We may update these terms; continued use after changes constitutes acceptance. Questions: <a href="mailto:contentforge.press@outlook.com">contentforge.press@outlook.com</a>.</p>`);
+}
+
+function renderContact() {
+    return legalPage('Contact &amp; Abuse', `
+<h2>Get in touch</h2>
+<p>General, security or abuse reports: <a href="mailto:contentforge.press@outlook.com">contentforge.press@outlook.com</a></p>
+<p>Please include the store domain, endpoint and a description of the issue. We aim to respond to legitimate reports.</p>
+<h2>Reporting abuse</h2>
+<p>If you believe the service is being used to infringe rights or process data improperly, email us with details and we will investigate promptly.</p>`);
+}
+
 function renderEmbed() {
     const snippet = '<div class="sci-widget" data-store="allbirds.com"></div>\n<script async src="https://shopify-intel.contentforge-press.workers.dev/widget.js"><\/script>';
     return `<!doctype html>
@@ -1300,6 +1372,9 @@ async function handle(request, env) {
         if (pathname === '/health') return json({ ok: true, time: new Date().toISOString() });
         if (pathname === '/.well-known/x402') return renderWellKnown();
         if (pathname === '/.well-known/glama.json') return renderGlama();
+        if (pathname === '/privacy') return renderPrivacy();
+        if (pathname === '/terms') return renderTerms();
+        if (pathname === '/contact') return renderContact();
         if (pathname === '/mcp') return handleMcp(request, env);
         if (pathname === '/robots.txt') return new Response(ROBOTS_TXT, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
         if (pathname === '/llms.txt') return new Response(LLMS_TXT, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
