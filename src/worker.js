@@ -184,6 +184,15 @@ function renderHome() {
     <pre id="out">// result will appear here</pre>
   </div>
 
+  <div class="card" style="border-color:var(--acc);background:linear-gradient(180deg,rgba(91,140,255,.10),var(--card))">
+    <b>Want continuous monitoring instead of one-off calls?</b>
+    <p class="muted">Track competitors, get change alerts and weekly digests from your own dashboard. Plans from <b>$99/month</b> — pay in USDC, access key delivered instantly.</p>
+    <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap">
+      <a href="/pricing" style="text-decoration:none"><button type="button">See plans &amp; pricing</button></a>
+      <a href="/dashboard" style="text-decoration:none"><button type="button" class="ghost" style="background:transparent;color:#cdd9ff">Open dashboard</button></a>
+    </div>
+  </div>
+
   <div class="grid grid3">
     <div class="card">
       <b>Free</b>
@@ -229,7 +238,7 @@ function renderHome() {
     </div>
   </div>
 
-  <p class="muted"><a href="/health">health</a> · <a href="/v1">JSON manifest</a> · <a href="/embed">embed widget</a> · <a href="/llms.txt">llms.txt</a></p>
+  <p class="muted"><a href="/pricing">pricing</a> · <a href="/dashboard">dashboard</a> · <a href="/health">health</a> · <a href="/v1">JSON manifest</a> · <a href="/embed">embed widget</a> · <a href="/llms.txt">llms.txt</a></p>
 </div>
 <script>
 async function run(){
