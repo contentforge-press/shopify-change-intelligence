@@ -4,9 +4,13 @@ A **zero-dependency** Cloudflare Worker that monitors Shopify stores and sells c
 
 ## What it does
 
-- `GET /v1/snapshot?store=allbirds.com` — **free**. Live catalog snapshot (product count, price min/max, availability, variants).
-- `GET /v1/changes?store=allbirds.com` — **paid ($0.05 / request)**. Change intelligence vs. the last stored snapshot: new products, removed products, price up/down, inventory restocked/out-of-stock.
-- `GET /` — service manifest. `GET /health` — health check.
+Four tiers, from free data to a distilled answer:
+
+- `GET /v1/snapshot?store=allbirds.com` — **free**. Live catalog snapshot (count, price range, availability).
+- `GET /v1/changes?store=allbirds.com` — **$0.05**. Raw change list vs. the last stored snapshot: new/removed products, price up/down, restock/out-of-stock.
+- `GET /v1/intel?store=allbirds.com` — **$0.50** ⭐. Full-catalog competitor intelligence report: price bands, median/range, top discounts & hikes, stock signals and auto-generated executive takeaways.
+- `POST /v1/batch` — **$0.03 / store** (max 50). Body `{"stores":["a.com","b.com"]}`; watches a whole competitor set in one call and returns per-store change counts.
+- `GET /mcp` — MCP (JSON-RPC over Streamable HTTP) exposing all four as tools. `GET /` — landing page. `GET /v1` — JSON manifest. `GET /health` — health check.
 
 When a paid route is called without payment the server returns `402 Payment Required` with a base64-encoded `PAYMENT-REQUIRED` header. An x402-capable agent fetches a USDC settlement, re-sends it in the `PAYMENT` header, and the worker verifies and settles it through the Coinbase x402 facilitator.
 
@@ -26,7 +30,7 @@ wrangler kv namespace create INTEL_KV   # copy id into wrangler.toml
 wrangler deploy
 ```
 
-Set your own payout address and price in `src/worker.js` (`PAY_TO`, `PRICE_USD`).
+Set your own payout address and prices in `src/worker.js` (`PAY_TO`, `PRICE_DEEP_USD`, `PRICE_INTEL_USD`, `PRICE_PER_STORE_USD`).
 
 ## Notes
 
