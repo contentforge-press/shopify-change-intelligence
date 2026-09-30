@@ -12,6 +12,12 @@ const NETWORK = 'base';
 
 const FREE_MAX_PRODUCTS = 200;
 const PRICE_DEEP_USD = 0.05;
+const PRICE_INTEL_USD = 0.50;
+const PRICE_PER_STORE_USD = 0.03;
+const BATCH_MAX_STORES = 50;
+
+// Full-catalog fetch cap for paid tiers (0 = all pages).
+const FULL_CAP = 0;
 
 const json = (obj, status = 200, extra = {}) => new Response(JSON.stringify(obj), {
     status,
@@ -41,7 +47,8 @@ function renderHome() {
   pre{background:#0a0d14;border:1px solid var(--line);border-radius:9px;padding:14px;overflow:auto;font-size:12.5px;max-height:340px}
   code{color:var(--grn)}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  @media(max-width:680px){.grid{grid-template-columns:1fr}}
+  .grid3{grid-template-columns:repeat(3,1fr)}
+  @media(max-width:760px){.grid,.grid3{grid-template-columns:1fr}}
   .pill{display:inline-block;font-size:12px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:2px 10px;margin-right:6px}
   a{color:var(--acc)}
   .muted{color:var(--mut);font-size:13.5px}
@@ -62,17 +69,28 @@ function renderHome() {
     <pre id="out">// result will appear here</pre>
   </div>
 
-  <div class="grid">
+  <div class="grid grid3">
     <div class="card">
-      <b>Free endpoint</b>
-      <p class="muted">Live catalog snapshot</p>
-      <code>GET /v1/snapshot?store=allbirds.com</code>
+      <b>Free</b>
+      <p class="muted">Live catalog snapshot — count, price range, availability</p>
+      <code>GET /v1/snapshot?store=…</code>
     </div>
     <div class="card">
-      <b>Paid endpoint · $0.05 USDC</b>
-      <p class="muted">New / removed products, price up/down, restock / out-of-stock vs. history</p>
-      <code>GET /v1/changes?store=allbirds.com</code>
+      <b>Data · $0.05 USDC</b>
+      <p class="muted">Raw change list: new/removed, price up/down, stock vs. history</p>
+      <code>GET /v1/changes?store=…</code>
     </div>
+    <div class="card" style="border-color:var(--acc)">
+      <b>Answer · $0.50 USDC ⭐</b>
+      <p class="muted">Competitor intelligence report: price bands, biggest moves, stock signals, executive takeaways</p>
+      <code>GET /v1/intel?store=…</code>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>For teams tracking many competitors · $0.03 USDC / store</b>
+    <p class="muted">One call watches up to ${BATCH_MAX_STORES} Shopify stores at once and returns each store's change counts. Build for recurring daily/weekly sweeps.</p>
+    <code>POST /v1/batch&nbsp;&nbsp;{"stores":["allbirds.com","gymshark.com","…"]}</code>
   </div>
 
   <div class="card">
@@ -221,6 +239,91 @@ function diffProducts(prevList, currList) {
     return changes;
 }
 
+// ---- Intel report: turn raw changes into an executive answer --------------
+function median(nums) {
+    const a = [...nums].sort((x, y) => x - y);
+    if (!a.length) return null;
+    const m = Math.floor(a.length / 2);
+    return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+
+function buildIntelReport(store, products, changes, prev, baselineTime, fetchedAt) {
+    // All variant prices across the catalog.
+    const allPrices = products.flatMap((p) => p.variants.map((v) => v.price)).filter((x) => x !== null);
+    const productMinPrices = products.map((p) => p.minPrice).filter((x) => x !== null);
+
+    const buckets = { under25: 0, '25to50': 0, '50to100': 0, '100to200': 0, over200: 0 };
+    for (const pr of productMinPrices) {
+        if (pr < 25) buckets.under25++;
+        else if (pr < 50) buckets['25to50']++;
+        else if (pr < 100) buckets['50to100']++;
+        else if (pr < 200) buckets['100to200']++;
+        else buckets.over200++;
+    }
+
+    const byType = (t) => changes.filter((c) => c.changeType === t);
+    const inc = byType('price_increased');
+    const dec = byType('price_decreased');
+    const drops = dec.map((c) => ({ title: c.title, variant: c.variant, from: c.from, to: c.to, percent: c.percent, url: c.url }))
+        .sort((a, b) => b.percent - a.percent);
+    const hikes = inc.map((c) => ({ title: c.title, variant: c.variant, from: c.from, to: c.to, percent: c.percent, url: c.url }))
+        .sort((a, b) => b.percent - a.percent);
+
+    const avg = (arr) => (arr.length ? Number((arr.reduce((s, x) => s + x.percent, 0) / arr.length).toFixed(1)) : null);
+    const inStock = products.filter((p) => p.available).length;
+    const oosProducts = products.filter((p) => !p.available);
+
+    // ---- Auto-generated executive takeaways (English) ----
+    const takeaways = [];
+    const totalVar = products.reduce((s, p) => s + p.variants.length, 0);
+    takeaways.push(`${products.length} products (${totalVar} variants) currently listed; median price $${median(allPrices)?.toFixed(2) ?? 'n/a'}, range $${allPrices.length ? Math.min(...allPrices).toFixed(2) : 'n/a'}–$${allPrices.length ? Math.max(...allPrices).toFixed(2) : 'n/a'}.`);
+    if (baselineTime) {
+        takeaways.push(`Since ${baselineTime}: ${byType('new_product').length} new, ${byType('removed_product').length} removed, ${inc.length} price increases, ${dec.length} cuts.`);
+        if (drops.length) takeaways.push(`Pricing moved DOWN on ${dec.length} variant(s), avg -${avg(dec)}%, deepest: ${drops[0].title} -${drops[0].percent}% to $${drops[0].to}.`);
+        if (hikes.length) takeaways.push(`Pricing moved UP on ${inc.length} variant(s), avg +${avg(inc)}%, largest: ${hikes[0].title} +${hikes[0].percent}% to $${hikes[0].to}.`);
+        if (byType('out_of_stock').length) takeaways.push(`${byType('out_of_stock').length} variant(s) went out of stock — possible demand spike or supply gap.`);
+        if (byType('back_in_stock').length) takeaways.push(`${byType('back_in_stock').length} variant(s) restocked.`);
+    } else {
+        takeaways.push('No prior baseline yet — this is the first observation, so trend signals start from the next report.');
+    }
+    if (oosProducts.length > products.length * 0.2) takeaways.push(`${oosProducts.length} products fully out of stock (${((oosProducts.length / products.length) * 100).toFixed(0)}%) — unusually high, watch for clearance or discontinuation.`);
+
+    return {
+        report: 'shopify_competitor_intelligence',
+        store,
+        generatedAt: fetchedAt,
+        comparedAgainst: baselineTime || null,
+        catalog: {
+            productCount: products.length,
+            variantCount: totalVar,
+            inStockProducts: inStock,
+            outOfStockProducts: oosProducts.length,
+            price: {
+                min: allPrices.length ? Math.min(...allPrices) : null,
+                median: median(allPrices),
+                max: allPrices.length ? Math.max(...allPrices) : null,
+            },
+            priceBandProducts: buckets,
+        },
+        changeSummary: {
+            newProducts: byType('new_product').length,
+            removedProducts: byType('removed_product').length,
+            priceIncreases: inc.length,
+            priceDecreases: dec.length,
+            outOfStock: byType('out_of_stock').length,
+            backInStock: byType('back_in_stock').length,
+            avgIncreasePct: avg(hikes),
+            avgDecreasePct: avg(drops),
+        },
+        topDiscounts: drops.slice(0, 10),
+        topIncreases: hikes.slice(0, 10),
+        newProducts: byType('new_product').slice(0, 20),
+        removedProducts: byType('removed_product').slice(0, 20),
+        executiveTakeaways: takeaways,
+        allChanges: changes,
+    };
+}
+
 // ---- x402 -----------------------------------------------------------------
 function buildRequirements(url, priceUsd, description) {
     const atomic = BigInt(Math.round(priceUsd * 1_000_000)).toString();
@@ -338,6 +441,100 @@ async function handleChanges(url, request, env) {
     });
 }
 
+// High-value paid tier: distilled competitor intelligence report.
+async function handleIntel(url, request, env) {
+    const store = normDomain(url.searchParams.get('store'));
+    if (!store) return json({ error: 'Missing ?store= domain' }, 400);
+
+    const requirements = buildRequirements(url.href, PRICE_INTEL_USD, `Competitor intelligence report for ${store}`);
+    const paymentHeader = request.headers.get('PAYMENT') || request.headers.get('X-PAYMENT');
+    if (!paymentHeader) return paymentRequired(requirements);
+
+    let settlement;
+    try {
+        settlement = await verifyAndSettle(paymentHeader, requirements);
+    } catch (err) {
+        return json({ error: 'unexpected_verify_error', detail: String(err?.message || err) }, 502);
+    }
+    if (!settlement.ok) return json({ x402Version: 1, error: settlement.reason }, 402);
+
+    let products;
+    try {
+        products = await fetchProducts(store, FULL_CAP);
+    } catch (err) {
+        return json({ error: err.message }, 502);
+    }
+
+    const kv = env.INTEL_KV;
+    const key = `snapshot-${store}`;
+    const raw = kv ? await kv.get(key, 'json') : null;
+    let changes = [];
+    let baselineTime = null;
+    if (raw && Array.isArray(raw.products)) {
+        changes = diffProducts(raw.products, products);
+        baselineTime = raw.savedAt || null;
+    }
+    const fetchedAt = new Date().toISOString();
+    if (kv) await kv.put(key, JSON.stringify({ savedAt: fetchedAt, products }));
+
+    const report = buildIntelReport(store, products, changes, raw, baselineTime, fetchedAt);
+    report.settlement = { payer: settlement.payer, transaction: settlement.transaction };
+    return json(report);
+}
+
+// Batch competitor watch: many stores in one call, priced per store.
+async function handleBatch(url, request, env) {
+    if (request.method !== 'POST') return json({ error: 'batch endpoint expects POST with JSON {stores:[...]}' }, 405);
+
+    let parsed;
+    try {
+        parsed = await request.json();
+    } catch {
+        return json({ error: 'invalid JSON body; expected {stores:[...]}' }, 400);
+    }
+    const stores = [...new Set((parsed.stores || []).map(normDomain).filter(Boolean))];
+    if (!stores.length) return json({ error: 'No stores provided' }, 400);
+    if (stores.length > 50) return json({ error: 'Up to 50 stores per batch call' }, 400);
+
+    const price = Number((stores.length * PRICE_PER_STORE_USD).toFixed(2));
+    const requirements = buildRequirements(url.href, price, `Batch change watch for ${stores.length} Shopify stores`);
+    const paymentHeader = request.headers.get('PAYMENT') || request.headers.get('X-PAYMENT');
+    if (!paymentHeader) return paymentRequired(requirements);
+
+    let settlement;
+    try {
+        settlement = await verifyAndSettle(paymentHeader, requirements);
+    } catch (err) {
+        return json({ error: 'unexpected_verify_error', detail: String(err?.message || err) }, 502);
+    }
+    if (!settlement.ok) return json({ x402Version: 1, error: settlement.reason }, 402);
+
+    const kv = env.INTEL_KV;
+    const results = await Promise.all(stores.map(async (store) => {
+        try {
+            const products = await fetchProducts(store, FREE_MAX_PRODUCTS);
+            const key = `snapshot-${store}`;
+            const raw = kv ? await kv.get(key, 'json') : null;
+            let changes = [];
+            if (raw && Array.isArray(raw.products)) changes = diffProducts(raw.products, products);
+            if (kv) await kv.put(key, JSON.stringify({ savedAt: new Date().toISOString(), products }));
+            const c = {};
+            for (const ch of changes) c[ch.changeType] = (c[ch.changeType] || 0) + 1;
+            return { store, ok: true, productCount: products.length, changeCount: changes.length, byType: c };
+        } catch (err) {
+            return { store, ok: false, error: err.message };
+        }
+    }));
+
+    return json({
+        storeCount: stores.length,
+        priceUsd: price,
+        generatedAt: new Date().toISOString(),
+        results,
+        settlement: { payer: settlement.payer, transaction: settlement.transaction },
+    });
+}
+
 async function handleMcp(request, env) {
     if (request.method === 'GET') return json({ jsonrpc: '2.0', error: { code: -32000, message: 'MCP endpoint expects POST' } }, 405);
 
@@ -384,14 +581,58 @@ async function handleMcp(request, env) {
                         required: ['store'],
                     },
                 },
+                {
+                    name: 'shopify_intel_report',
+                    description: 'PAID ($0.50 USDC on Base via x402). The highest-value tool: a full-catalog competitor intelligence report with price bands, median/range, biggest discounts & hikes, stock signals and auto-generated executive takeaways you can put straight into a briefing.',
+                    inputSchema: {
+                        type: 'object',
+                        properties: { store: { type: 'string', description: 'Shopify domain, e.g. allbirds.com' } },
+                        required: ['store'],
+                    },
+                },
+                {
+                    name: 'shopify_batch_watch',
+                    description: `PAID ($0.03 USDC per store on Base via x402, max ${BATCH_MAX_STORES}). Watch a whole set of competitor Shopify stores in one call; returns per-store change counts (new/removed/price/stock).`,
+                    inputSchema: {
+                        type: 'object',
+                        properties: { stores: { type: 'array', items: { type: 'string' }, description: 'Shopify domains, e.g. ["allbirds.com","gymshark.com"]' } },
+                        required: ['stores'],
+                    },
+                },
             ],
         });
     }
 
     if (method === 'tools/call') {
         const name = params?.name;
+
+        if (name === 'shopify_batch_watch') {
+            const rawStores = params?.arguments?.stores;
+            const stores = [...new Set((Array.isArray(rawStores) ? rawStores : []).map(normDomain).filter(Boolean))];
+            if (!stores.length) return rerr(-32602, 'Missing required argument: stores (non-empty array)');
+            if (stores.length > BATCH_MAX_STORES) return rerr(-32602, `Up to ${BATCH_MAX_STORES} stores per call`);
+            const price = Number((stores.length * PRICE_PER_STORE_USD).toFixed(2));
+            const reqHeaders = { 'content-type': 'application/json' };
+            const payH = request.headers.get('PAYMENT') || request.headers.get('X-PAYMENT');
+            if (payH) reqHeaders.PAYMENT = payH;
+            const sub = new Request(new URL(request.url).href, {
+                method: 'POST',
+                headers: reqHeaders,
+                body: JSON.stringify({ stores }),
+            });
+            const res = await handleBatch(new URL(request.url), sub, env);
+            const txt = await res.text();
+            const outHeaders = {};
+            const pr = res.headers.get('PAYMENT-REQUIRED');
+            if (pr) outHeaders['PAYMENT-REQUIRED'] = pr;
+            if (res.status === 402 && !payH) {
+                return toolText(`This tool costs $${price} USDC on Base via x402 (${stores.length} stores × $${PRICE_PER_STORE_USD}). Pay to ${PAY_TO} and retry carrying the PAYMENT header.`, true, outHeaders);
+            }
+            return toolText(txt, res.status >= 400, outHeaders);
+        }
+
         const store = normDomain(params?.arguments?.store);
-        if (!store) return rerr(-32602, 'Missing required argument: store');
+        if (!store) return rerr(-32602,'Missing required argument: store');
 
         if (name === 'shopify_snapshot') {
             try {
@@ -454,6 +695,45 @@ async function handleMcp(request, env) {
             }
         }
 
+        if (name === 'shopify_intel_report') {
+            const requirements = buildRequirements(new URL(request.url).href, PRICE_INTEL_USD, `Competitor intelligence report for ${store}`);
+            const paymentHeader = request.headers.get('PAYMENT') || request.headers.get('X-PAYMENT');
+            if (!paymentHeader) {
+                return toolText(
+                    `This tool costs $${PRICE_INTEL_USD} USDC on Base via the x402 protocol. Pay to ${PAY_TO} and retry carrying the x402 payment in the PAYMENT header. See the PAYMENT-REQUIRED response header for the machine-readable challenge.`,
+                    true,
+                    { 'PAYMENT-REQUIRED': b64encode(requirements) },
+                );
+            }
+            let settlement;
+            try {
+                settlement = await verifyAndSettle(paymentHeader, requirements);
+            } catch (err) {
+                return toolText(`verify error: ${err.message}`, true);
+            }
+            if (!settlement.ok) return toolText(`payment rejected: ${settlement.reason}`, true);
+
+            try {
+                const products = await fetchProducts(store, FULL_CAP);
+                const kv = env.INTEL_KV;
+                const key = `snapshot-${store}`;
+                const raw = kv ? await kv.get(key, 'json') : null;
+                let changes = [];
+                let baselineTime = null;
+                if (raw && Array.isArray(raw.products)) {
+                    changes = diffProducts(raw.products, products);
+                    baselineTime = raw.savedAt || null;
+                }
+                const fetchedAt = new Date().toISOString();
+                if (kv) await kv.put(key, JSON.stringify({ savedAt: fetchedAt, products }));
+                const report = buildIntelReport(store, products, changes, raw, baselineTime, fetchedAt);
+                report.settlement = { payer: settlement.payer, transaction: settlement.transaction };
+                return toolText(JSON.stringify(report, null, 2));
+            } catch (err) {
+                return toolText(`error: ${err.message}`, true);
+            }
+        }
+
         return rerr(-32601, `Unknown tool: ${name}`);
     }
 
@@ -494,6 +774,22 @@ function renderWellKnown() {
                 price: `${PRICE_DEEP_USD} USDC`,
                 scheme: 'exact',
             },
+            {
+                url: '/v1/intel',
+                description: 'Full-catalog competitor intelligence report: price bands, median/range, top discounts & hikes, stock signals, executive takeaways.',
+                method: 'GET',
+                mimeType: 'application/json',
+                price: `${PRICE_INTEL_USD} USDC`,
+                scheme: 'exact',
+            },
+            {
+                url: '/v1/batch',
+                description: `POST {stores:[...]} — change watch across many competitor stores at once.`,
+                method: 'POST',
+                mimeType: 'application/json',
+                price: `${PRICE_PER_STORE_USD} USDC per store`,
+                scheme: 'exact',
+            },
         ],
     });
 }
@@ -511,10 +807,17 @@ export default {
                 payTo: PAY_TO,
                 endpoints: {
                     free: '/v1/snapshot?store=allbirds.com',
-                    paid: '/v1/changes?store=allbirds.com',
+                    changes: '/v1/changes?store=allbirds.com',
+                    intel: '/v1/intel?store=allbirds.com',
+                    batch: 'POST /v1/batch {stores:[...]}',
                     health: '/health',
                 },
-                pricing: { snapshot: 'free', deepChanges: `$${PRICE_DEEP_USD} in USDC` },
+                pricing: {
+                    snapshot: 'free',
+                    changes: `$${PRICE_DEEP_USD} USDC`,
+                    intelReport: `$${PRICE_INTEL_USD} USDC`,
+                    batch: `$${PRICE_PER_STORE_USD} USDC per store (max ${BATCH_MAX_STORES})`,
+                },
             });
         }
         if (pathname === '/health') return json({ ok: true, time: new Date().toISOString() });
@@ -523,6 +826,8 @@ export default {
         if (pathname === '/mcp') return handleMcp(request, env);
         if (pathname === '/v1/snapshot') return handleSnapshot(url, env);
         if (pathname === '/v1/changes') return handleChanges(url, request, env);
+        if (pathname === '/v1/intel') return handleIntel(url, request, env);
+        if (pathname === '/v1/batch') return handleBatch(url, request, env);
 
         return json({ error: 'not_found' }, 404);
     },
