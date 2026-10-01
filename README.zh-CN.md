@@ -23,8 +23,9 @@
 
 - **运行时：** Cloudflare Workers（原生 `fetch`，无框架、无 npm 依赖）。
 - **结算：** x402 协议，Base 主网（chainId 8453），USDC 合约 `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`。
-- **Facilitator：** `https://x402.org/facilitator`（`/verify`、`/settle`）。
-- **存储（可选）：** Workers KV 命名空间 `INTEL_KV`，用于历史快照；没有它服务也能运行（免费快照始终实时，变化检测以空基线对比）。
+- **双协议：** 同时支持 x402 **v1** 与 **v2**；主网结算走生产 facilitator `https://x402.stablecoin.xyz`（真实 USDC 结算）。
+- **存储：** Workers KV，用于历史快照、匿名用量计数与一把通用 key。
+- **月订阅：** Hobby $9 / Pro $99 / Business $499 / Enterprise $2000，同一把 key 全系列 5 个产品通用。详见 [定价页](https://s-shopify.pixharvest.com/pricing) 与公司枢纽 [pixharvest.com](https://pixharvest.com)。
 
 ## 合规与联系
 

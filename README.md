@@ -1,42 +1,87 @@
-# Shopify Change Intelligence
+# 🛍️ Shopify Change Intelligence
 
-**English** · [简体中文](README.zh-CN.md)
+![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP-7c3aed)
+![x402](https://img.shields.io/badge/x402-v1%20%2B%20v2-6938ef)
+![USDC](https://img.shields.io/badge/settle-USDC%20on%20Base-1f6feb)
+![price](https://img.shields.io/badge/from-%240.05%2Fcall-2ea043)
 
-A **zero-dependency** Cloudflare Worker that monitors Shopify stores and sells change intelligence. AI agents pay automatically in **USDC on Base** via the native **x402** protocol — no platform account, no payment processor, 0% commission.
+Monitor Shopify stores — products, prices and inventory — and sell the change report to AI agents.
 
-**npm:** [`shopify-change-intelligence`](https://www.npmjs.com/package/shopify-change-intelligence) — `npx shopify-change-intelligence` prints the MCP client config for the hosted server.
+Agents pay **peer-to-peer in USDC on Base** using the native **x402** protocol — no platform account, no payment processor, **0% commission**. You can also use a monthly key. One key works across the [whole Change Intelligence family](https://pixharvest.com).
 
-## What it does
+- **Hosted service:** https://s-shopify.pixharvest.com
+- **MCP endpoint:** `https://s-shopify.pixharvest.com/mcp`
+- **Official MCP Registry:** `io.github.contentforge-press/shopify-intel`
+- **npm:** [`shopify-change-intelligence`](https://www.npmjs.com/package/shopify-change-intelligence)
 
-Four tiers, from free data to a distilled answer:
+## Try it now
 
-- `GET /v1/snapshot?store=allbirds.com` — **free**. Live catalog snapshot (count, price range, availability).
-- `GET /v1/changes?store=allbirds.com` — **$0.05**. Raw change list vs. the last stored snapshot: new/removed products, price up/down, restock/out-of-stock.
-- `GET /v1/intel?store=allbirds.com` — **$0.50** ⭐. Full-catalog competitor intelligence report: price bands, median/range, top discounts & hikes, stock signals and auto-generated executive takeaways.
-- `POST /v1/batch` — **$0.03 / store** (max 50). Body `{"stores":["a.com","b.com"]}`; watches a whole competitor set in one call and returns per-store change counts.
-- `GET /mcp` — MCP (JSON-RPC over Streamable HTTP) exposing all four as tools. `GET /` — landing page. `GET /v1` — JSON manifest. `GET /health` — health check.
+Open a **free, no-key snapshot**: https://s-shopify.pixharvest.com/v1/snapshot?store=allbirds.com
 
-When a paid route is called without payment the server returns `402 Payment Required` with a base64-encoded `PAYMENT-REQUIRED` header. An x402-capable agent fetches a USDC settlement, re-sends it in the `PAYMENT` header, and the worker verifies and settles it through the Coinbase x402 facilitator.
+Target format: `?store=allbirds.com` (a myshopify.com domain or custom domain)
 
-## Architecture
+## Tools
 
-- **Runtime:** Cloudflare Workers (native `fetch`, no frameworks, no npm dependencies).
-- **Settlement:** x402 protocol, Base mainnet (chainId 8453), USDC `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`.
-- **Facilitator:** `https://x402.org/facilitator` (`/verify`, `/settle`).
-- **Storage (optional):** Workers KV namespace `INTEL_KV` for historical snapshots. Without it the worker still runs; the free snapshot is always live and change detection reports against an empty baseline.
+| Tool | Price | Returns |
+|---|---|---|
+| `shopify_snapshot` | Free | Current products, prices and stock for one store |
+| `shopify_changes` | $0.05 | New / removed products, price and inventory changes since last fetch |
+| `shopify_intel_report` | $0.50 | Competitor summary: assortment, pricing bands, risk flags |
+| `shopify_batch_watch` | $0.03 / store | Scan up to 50 stores in one call |
+| `shopify_competitive_landscape` | $5 | Rank up to 10 stores on price, assortment and stock |
 
-## Deploy
+## One-call install for MCP clients
+
+The npm wrapper prints ready-to-paste MCP config:
 
 ```bash
-npm i -g wrangler
-wrangler login
-wrangler kv namespace create INTEL_KV   # copy id into wrangler.toml
-wrangler deploy
+npx -y shopify-change-intelligence
 ```
 
-Set your own payout address and prices in `src/worker.js` (`PAY_TO`, `PRICE_DEEP_USD`, `PRICE_INTEL_USD`, `PRICE_PER_STORE_USD`).
+Or Add the remote server manually to any MCP client (Claude Desktop, Cursor, Windsurf, …):
 
-## Notes
+```json
+{
+  "mcpServers": {
+    "intel-worker": {
+      "url": "https://s-shopify.pixharvest.com/mcp"
+    }
+  }
+}
+```
 
-- Only public, unauthenticated `/products.json` endpoints are read.
-- Payment settlement is independent of discovery: to be found by agents, list the endpoint in x402/MCP directories.
+Anonymous `initialize` / `tools/list` are free; paid tool calls return an `x402` challenge.
+
+## Pay-per-call (x402)
+
+Call a paid route without payment and you receive `402 Payment Required` with a machine-readable `PAYMENT-REQUIRED` header (x402 v2) plus a v1 JSON body. The agent signs a USDC authorization, retries with the payment header, and the request settles on Base.
+
+## Monthly plans
+
+Same four tiers on every product — the same access key unlocks all five feeds:
+
+| Hobby | Pro | Business | Enterprise |
+|---|---|---|---|
+| $9/mo | $99/mo | $499/mo | $2000/mo |
+
+Get a key from the [pricing page](https://s-shopify.pixharvest.com/pricing), then pass it as `?key=...` on any call.
+
+## HTTP quick start
+
+```bash
+# free snapshot
+curl "https://s-shopify.pixharvest.com/v1/snapshot?store=REPLACE_TARGET"
+
+# paid call — returns 402 with the x402 challenge
+curl -i "https://s-shopify.pixharvest.com/v1/changes?store=REPLACE_TARGET"
+```
+
+## Links
+
+- Company hub: https://pixharvest.com
+- GitHub: https://github.com/contentforge-press
+- Contact: contentforge.press@outlook.com
+
+## License
+
+MIT — self-host, modify and run it yourself. The hosted service and its data are provided as-is.
