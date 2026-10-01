@@ -4,6 +4,7 @@
 // change-diff costs USDC on Base, settled P2P to our own wallet.
 // ---------------------------------------------------------------------------
 import { FAVICON_B64, OG_B64 } from './brand.js';
+import { paymentRequiredResponse, verifySettleDual } from './x402v2.js';
 import { recordAnalytics, readAnalytics, ANALYTICS_JS } from './analytics.js';
 
 const TRUST_HTML = `
@@ -596,6 +597,7 @@ function buildRequirements(url, priceUsd, description) {
         maxAmountRequired: atomic,
         resource: url,
         description,
+        priceUsd,
         mimeType: 'application/json',
         payTo: PAY_TO,
         maxTimeoutSeconds: 600,
@@ -629,6 +631,30 @@ async function verifyAndSettle(paymentHeader, requirements) {
     const settle = await settleRes.json();
     if (!settle.success) return { ok: false, reason: settle.errorReason || 'unexpected_settle_error' };
     return { ok: true, payer: settle.payer, transaction: settle.transaction };
+}
+
+
+// Unified x402 gate: supports v2 (PAYMENT-SIGNATURE) and v1 callers.
+async function gatePayment(request, requirements, priceUsd) {
+    const cfg = {
+        NETWORK_V2: 'eip155:8453', FACILITATOR_V2: 'https://x402.stablecoin.xyz',
+        USDC_BASE, PAY_TO,
+    };
+    const payH = request.headers.get('PAYMENT') || request.headers.get('X-PAYMENT')
+        || request.headers.get('PAYMENT-SIGNATURE');
+    if (!payH) {
+        return paymentRequiredResponse({
+            resource: requirements.resource, description: requirements.description,
+            priceUsd, cfg, v1Requirements: requirements,
+        });
+    }
+    const r = await verifySettleDual({
+        request, resource: requirements.resource, amount: requirements.maxAmountRequired,
+        priceUsd, cfg,
+        v1Verify: async (raw) => verifyAndSettle(raw, requirements),
+    });
+    if (!r.ok) return json({ x402Version: 1, error: r.reason }, 402);
+    return { ok: true, settlement: r };
 }
 
 // ---- Embeddable widget (CORS-open compact data) ---------------------------
@@ -701,16 +727,9 @@ async function handleChanges(url, request, env) {
     if (!store) return json({ error: 'Missing ?store= domain' }, 400);
 
     const requirements = buildRequirements(url.href, PRICE_DEEP_USD, `Shopify change detection for ${store}`);
-    const paymentHeader = request.headers.get('PAYMENT') || request.headers.get('X-PAYMENT');
-    if (!paymentHeader) return paymentRequired(requirements);
-
-    let settlement;
-    try {
-        settlement = await verifyAndSettle(paymentHeader, requirements);
-    } catch (err) {
-        return json({ error: 'unexpected_verify_error', detail: String(err?.message || err) }, 502);
-    }
-    if (!settlement.ok) return json({ x402Version: 1, error: settlement.reason }, 402);
+    const gate = await gatePayment(request, requirements, requirements.priceUsd);
+    if (!gate.ok) return gate;
+    const settlement = gate.settlement;
 
     let products;
     try {
@@ -747,16 +766,9 @@ async function handleIntel(url, request, env) {
     if (!store) return json({ error: 'Missing ?store= domain' }, 400);
 
     const requirements = buildRequirements(url.href, PRICE_INTEL_USD, `Competitor intelligence report for ${store}`);
-    const paymentHeader = request.headers.get('PAYMENT') || request.headers.get('X-PAYMENT');
-    if (!paymentHeader) return paymentRequired(requirements);
-
-    let settlement;
-    try {
-        settlement = await verifyAndSettle(paymentHeader, requirements);
-    } catch (err) {
-        return json({ error: 'unexpected_verify_error', detail: String(err?.message || err) }, 502);
-    }
-    if (!settlement.ok) return json({ x402Version: 1, error: settlement.reason }, 402);
+    const gate = await gatePayment(request, requirements, requirements.priceUsd);
+    if (!gate.ok) return gate;
+    const settlement = gate.settlement;
 
     let products;
     try {
@@ -798,16 +810,9 @@ async function handleBatch(url, request, env) {
 
     const price = Number((stores.length * PRICE_PER_STORE_USD).toFixed(2));
     const requirements = buildRequirements(url.href, price, `Batch change watch for ${stores.length} Shopify stores`);
-    const paymentHeader = request.headers.get('PAYMENT') || request.headers.get('X-PAYMENT');
-    if (!paymentHeader) return paymentRequired(requirements);
-
-    let settlement;
-    try {
-        settlement = await verifyAndSettle(paymentHeader, requirements);
-    } catch (err) {
-        return json({ error: 'unexpected_verify_error', detail: String(err?.message || err) }, 502);
-    }
-    if (!settlement.ok) return json({ x402Version: 1, error: settlement.reason }, 402);
+    const gate = await gatePayment(request, requirements, requirements.priceUsd);
+    if (!gate.ok) return gate;
+    const settlement = gate.settlement;
 
     const kv = env.INTEL_KV;
     const results = await Promise.all(stores.map(async (store) => {
@@ -899,14 +904,9 @@ async function handleLandscape(url, request, env) {
     if (stores.length > LANDSCAPE_MAX_STORES) return json({ error: 'too_many_stores', max: LANDSCAPE_MAX_STORES }, 400);
     const useAnchor = anchor && stores.includes(anchor) ? anchor : stores[0];
 
-    if (request.headers.get('PAYMENT')) {
-        const requirements = buildRequirements(url.href, PRICE_LANDSCAPE_USD, `Competitive landscape across ${stores.length} Shopify stores`);
-        const settle = await verifyAndSettle(request.headers.get('PAYMENT'), requirements);
-        if (!settle.valid) return json({ error: 'payment_invalid', reason: settle.reason }, 402);
-    } else {
-        const requirements = buildRequirements(url.href, PRICE_LANDSCAPE_USD, `Competitive landscape across ${stores.length} Shopify stores`);
-        return paymentRequired(requirements);
-    }
+    const requirements = buildRequirements(url.href, PRICE_LANDSCAPE_USD, `Competitive landscape across ${stores.length} Shopify stores`);
+    const gate = await gatePayment(request, requirements, PRICE_LANDSCAPE_USD);
+    if (!gate.ok) return gate;
 
     const perStore = await Promise.all(stores.map(async (store) => {
         try {
@@ -1489,16 +1489,9 @@ async function handleSubscribe(url, request, env) {
     const resource = `${new URL(url).origin}/v1/subscribe?plan=${planId}`;
     const requirements = buildRequirements(resource, plan.price, `Shopify Change Intelligence ${plan.name} subscription (${plan.days} days)`);
 
-    const paymentHeader = request.headers.get('PAYMENT') || request.headers.get('X-PAYMENT');
-    if (!paymentHeader) return paymentRequired(requirements);
-
-    let settlement;
-    try {
-        settlement = await verifyAndSettle(paymentHeader, requirements);
-    } catch (err) {
-        return json({ error: 'unexpected_verify_error', detail: String(err?.message || err) }, 502);
-    }
-    if (!settlement.ok) return json({ x402Version: 1, error: settlement.reason }, 402);
+    const gate = await gatePayment(request, requirements, requirements.priceUsd);
+    if (!gate.ok) return gate;
+    const settlement = gate.settlement;
 
     const now = Date.now();
     const expiresAt = new Date(now + plan.days * 86400_000).toISOString();
