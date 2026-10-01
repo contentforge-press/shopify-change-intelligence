@@ -4,6 +4,21 @@
 // change-diff costs USDC on Base, settled P2P to our own wallet.
 // ---------------------------------------------------------------------------
 import { FAVICON_B64, OG_B64 } from './brand.js';
+import { recordAnalytics, readAnalytics, ANALYTICS_JS } from './analytics.js';
+
+const TRUST_HTML = `
+<div class="wrap" style="margin-top:28px;max-width:920px;margin-left:auto;margin-right:auto">
+ <h2 style="font-size:20px">Real evidence, live data</h2>
+ <p style="color:#8b95a7;font-size:13px;margin:4px 0 14px">Every number pulled from the same Shopify products.json feed this service monitors. <a href="/card.png" target="_blank">open full size</a></p>
+ <a href="/card.png" target="_blank"><img src="/card.png" alt="real shopify intelligence report" loading="lazy" style="width:100%;max-width:860px;border:1px solid #222a3a;border-radius:14px;display:block"></a>
+</div>`;
+const pageOut = (h, p) => {
+    if (typeof h === 'string' && h.includes('</body>')) {
+        const trust = (p === '/' || p === '/pricing') ? TRUST_HTML : '';
+        h = h.replace('</body>', `<style>img{max-width:100%}</style>${trust}<script>${ANALYTICS_JS}</script></body>`);
+    }
+    return new Response(h, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+};
 
 const PAY_TO = '0x4873108b2280b7f3EF8cD70cEca3aaBD385f8D6C';
 const FACILITATOR = 'https://x402.org/facilitator';
@@ -269,7 +284,7 @@ async function run(){
 </script>
 </body>
 </html>`;
-    return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+    return html;
 }
 
 // Normalize, then strictly validate a public hostname. Throws on anything
@@ -865,7 +880,7 @@ async function handleStats(url, request, env) {
         const raw = await env.INTEL_KV.get(`stats-${d}`);
         if (raw) days.push({ day: d, ...JSON.parse(raw) });
     }
-    return json({ days });
+    return json({ days, visitors: await readAnalytics(env.INTEL_KV, n) });
 }
 
 async function handleLandscape(url, request, env) {
@@ -2219,7 +2234,7 @@ async function handle(request, env) {
     const { pathname } = url;
     const skv = env.SHARED_KV || env.INTEL_KV;
 
-    if (pathname === '/') return renderHome();
+    if (pathname === '/') return pageOut(renderHome(), '/');
         if (pathname === '/v1') {
             return json({
                 service: 'Shopify Change Intelligence',
@@ -2250,7 +2265,7 @@ async function handle(request, env) {
         if (pathname === '/terms') return renderTerms();
         if (pathname === '/contact') return renderContact();
         if (pathname === '/changelog') return new Response(renderChangelog(), { headers: { 'content-type': 'text/html; charset=utf-8' } });
-        if (pathname === '/pricing') return new Response(renderPricing(), { headers: { 'content-type': 'text/html; charset=utf-8' } });
+        if (pathname === '/pricing') return pageOut(renderPricing(), '/pricing');
         if (pathname === '/v1/subscribe') return handleSubscribe(url, request, env);
         if (pathname === '/v1/order') {
             const plan = PLANS[url.searchParams.get('plan')];
@@ -2275,6 +2290,13 @@ async function handle(request, env) {
     if (pathname === '/llms.txt') return new Response(LLMS_TXT, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
         if (pathname === '/favicon.png') return new Response(Uint8Array.from(atob(FAVICON_B64), c => c.charCodeAt(0)), { headers: { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400' } });
         if (pathname === '/og.png') return new Response(Uint8Array.from(atob(OG_B64), c => c.charCodeAt(0)), { headers: { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400' } });
+if (pathname === '/card.png') { const { CARD_B64 } = await import('./trust.js'); return new Response(Uint8Array.from(atob(CARD_B64), c => c.charCodeAt(0)), { headers: { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400' } }); }
+if (pathname === '/__beacon') {
+    if (request.method !== 'POST') return json({ error: 'method' }, 405);
+    let body = {}; try { body = await request.json(); } catch {}
+    await recordAnalytics(env.INTEL_KV, body, request.headers.get('cookie'));
+    return new Response('', { status: 204 });
+}
     if (pathname === '/docs') return new Response(DOCS_MD, { headers: { 'content-type': 'text/markdown; charset=utf-8' } });
         if (pathname === '/sitemap.xml') return new Response(SITEMAP_XML, { headers: { 'content-type': 'application/xml; charset=utf-8' } });
         if (pathname === '/widget.js') return new Response(WIDGET_JS, { headers: { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'public, max-age=600' } });
