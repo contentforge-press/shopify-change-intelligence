@@ -3,6 +3,7 @@
 // Zero third-party deps (native Fetch router). Free snapshot answer; the deep
 // change-diff costs USDC on Base, settled P2P to our own wallet.
 // ---------------------------------------------------------------------------
+import { FAVICON_B64, OG_B64 } from './brand.js';
 
 const PAY_TO = '0x4873108b2280b7f3EF8cD70cEca3aaBD385f8D6C';
 const FACILITATOR = 'https://x402.org/facilitator';
@@ -148,6 +149,13 @@ function renderHome() {
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Shopify Change Intelligence — x402</title>
+<meta name="description" content="Track product launches, price changes and inventory moves across any public Shopify store. Free CLI quota, Hobby $9/mo in USDC." />
+<link rel="icon" type="image/png" href="/favicon.png" />
+<meta property="og:type" content="website" />
+<meta property="og:title" content="Shopify Change Intelligence" />
+<meta property="og:description" content="Track product launches, price changes and inventory moves across any public Shopify store. Hobby $9/mo in USDC." />
+<meta property="og:image" content="/og.png" />
+<meta name="twitter:card" content="summary_large_image" />
 <style>
   :root{--bg:#0b0e14;--card:#141925;--line:#222a3a;--fg:#e8ecf4;--mut:#8b95a7;--acc:#5b8cff;--grn:#37d39b}
   *{box-sizing:border-box}
@@ -164,7 +172,7 @@ function renderHome() {
   pre{background:#0a0d14;border:1px solid var(--line);border-radius:9px;padding:14px;overflow:auto;font-size:12.5px;max-height:340px}
   code{color:var(--grn)}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-  .grid3{grid-template-columns:repeat(3,1fr)}
+  .grid3{grid-template-columns:repeat(4,1fr)}
   @media(max-width:760px){.grid,.grid3{grid-template-columns:1fr}}
   .pill{display:inline-block;font-size:12px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:2px 10px;margin-right:6px}
   a{color:var(--acc)}
@@ -1278,6 +1286,33 @@ const PLANS = {
     },
 };
 
+const CHANGELOG = [
+  { date: '2026-10-01', tag: 'Growth', items: [
+    'Hobby $9 entry plan launched.',
+    'Free CLI with per-install quota (changes/intel 20, batch/landscape 3 per 30 days).',
+    'One access key now works across all five intelligence feeds.',
+  ]},
+  { date: '2026-09-30', tag: 'Discovery', items: [
+    'Added llms.txt and /docs for AI-agent discovery.',
+    'Public /status page with live health probes.',
+  ]},
+  { date: '2026-09-29', tag: 'Platform', items: [
+    'Listed on the official MCP Registry, Smithery and Glama.',
+    'Self-serve /pricing checkout and /dashboard with webhook + email alerts.',
+    'Company-grade hardening: no key custody, SSRF guard, rate limits.',
+  ]},
+];
+function renderChangelog() {
+  const rows = CHANGELOG.map(r => '<div class="cl-card"><div class="cl-head"><span class="cl-date">'+r.date+'</span><span class="cl-tag">'+r.tag+'</span></div><ul>'+r.items.map(i=>'<li>'+i+'</li>').join('')+'</ul></div>').join('');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="icon" type="image/png" href="/favicon.png"><title>Changelog</title><style>
+body{margin:0;font:15px/1.6 -apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#0b0e14;color:#e8ecf4}.wrap{max-width:820px;margin:0 auto;padding:48px 22px}a{color:#9db8ff}
+h1{margin:0 0 4px}.sub{color:#8b95a7;margin:0 0 20px}
+.cl-card{background:#141925;border:1px solid #222a3a;border-radius:14px;padding:18px 20px;margin:14px 0}
+.cl-head{display:flex;gap:12px;align-items:center;margin-bottom:6px}.cl-date{font-weight:700}.cl-tag{font-size:11px;text-transform:uppercase;color:#5b8cff;border:1px solid #222a3a;border-radius:999px;padding:2px 10px}
+ul{margin:0;padding-left:20px}li{padding:3px 0;font-size:14px}
+</style></head><body><div class="wrap"><h1>Changelog</h1><p class="sub">What shipped, most recent first. <a href="/">Home</a></p>${rows}</div></body></html>`;
+}
+
 function renderPricing() {
     const cards = Object.values(PLANS).map((p, i) => `
   <div class="plan${i === 1 ? ' hl' : ''}">
@@ -2188,6 +2223,7 @@ async function handle(request, env) {
         if (pathname === '/privacy') return renderPrivacy();
         if (pathname === '/terms') return renderTerms();
         if (pathname === '/contact') return renderContact();
+        if (pathname === '/changelog') return new Response(renderChangelog(), { headers: { 'content-type': 'text/html; charset=utf-8' } });
         if (pathname === '/pricing') return new Response(renderPricing(), { headers: { 'content-type': 'text/html; charset=utf-8' } });
         if (pathname === '/v1/subscribe') return handleSubscribe(url, request, env);
         if (pathname === '/v1/order') {
@@ -2211,6 +2247,8 @@ async function handle(request, env) {
         if (pathname === '/robots.txt') return new Response(ROBOTS_TXT, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
         if (pathname === '/status') return new Response(STATUS_HTML, { headers: { 'content-type': 'text/html; charset=utf-8' } });
     if (pathname === '/llms.txt') return new Response(LLMS_TXT, { headers: { 'content-type': 'text/plain; charset=utf-8' } });
+        if (pathname === '/favicon.png') return new Response(Uint8Array.from(atob(FAVICON_B64), c => c.charCodeAt(0)), { headers: { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400' } });
+        if (pathname === '/og.png') return new Response(Uint8Array.from(atob(OG_B64), c => c.charCodeAt(0)), { headers: { 'content-type': 'image/png', 'cache-control': 'public, max-age=86400' } });
     if (pathname === '/docs') return new Response(DOCS_MD, { headers: { 'content-type': 'text/markdown; charset=utf-8' } });
         if (pathname === '/sitemap.xml') return new Response(SITEMAP_XML, { headers: { 'content-type': 'application/xml; charset=utf-8' } });
         if (pathname === '/widget.js') return new Response(WIDGET_JS, { headers: { 'content-type': 'application/javascript; charset=utf-8', 'cache-control': 'public, max-age=600' } });
