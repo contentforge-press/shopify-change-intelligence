@@ -3,11 +3,11 @@
   "name": "io.github.contentforge-press/shopify-intel",
   "title": "Shopify Change Intelligence",
   "description": "Monitor public Shopify stores: free snapshot, paid change intel, competitor reports via x402 USDC.",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "remotes": [
     {
       "type": "streamable-http",
-      "url": "https://shopify-intel.contentforge-press.workers.dev/mcp"
+      "url": "https://s-shopify.pixharvest.com/mcp"
     }
   ],
   "packages": [
@@ -17,7 +17,7 @@
       "version": "1.0.2",
       "transport": {
         "type": "streamable-http",
-        "url": "https://shopify-intel.contentforge-press.workers.dev/mcp"
+        "url": "https://s-shopify.pixharvest.com/mcp"
       }
     }
   ]
