@@ -1171,6 +1171,31 @@ function renderGlama() {
     });
 }
 
+function renderAgentMeta(origin) {
+    const base = origin;
+    return json({
+        name: 'Shopify Change Intelligence',
+        description: 'Shopify intelligence for autonomous AI agents. Free public snapshot of stores, products, prices and inventory; paid change detection, intel reports, batch scans and market landscape. Paid calls settle USDC on Base via x402 (P2P, 0% commission). One access key works across the whole change-intelligence family. Free CLI quota, Hobby $9/mo and higher plans.',
+        image: `${base}/favicon.png`,
+        x402Support: true,
+        payment: {
+            scheme: 'exact', network: 'eip155:8453', asset: USDC_BASE,
+            payTo: PAY_TO, facilitator: FACILITATOR,
+            pricing: {
+                changes: PRICE_DEEP_USD, intel: PRICE_INTEL_USD,
+                batchPerStore: PRICE_PER_STORE_USD, landscape: PRICE_LANDSCAPE_USD,
+            },
+        },
+        services: [
+            { name: 'MCP', endpoint: `${base}/mcp`, version: '2025-06-18', description: 'Shopify intelligence — Streamable HTTP MCP with free and x402-paid tools.' },
+            { name: 'API', endpoint: `${base}/v1/cli`, description: 'CLI/agent endpoint: free anonymous quota, then x402 per call.' },
+            { name: 'x402', endpoint: `${base}/.well-known/x402`, description: 'Machine-readable payment requirements.' },
+            { name: 'web', endpoint: `${base}/`, description: 'Human docs, pricing, dashboard, demos.' },
+            { name: 'pricing', endpoint: `${base}/pricing`, description: 'Hobby $9, Pro $99, Business $499, Enterprise $2000 per month.' },
+        ],
+    });
+}
+
 const LEGAL_CSS = `
 :root{--bg:#0b0e14;--card:#141925;--line:#222a3a;--fg:#e8ecf4;--mut:#8b95a7;--acc:#5b8cff}
 *{box-sizing:border-box}
@@ -2001,7 +2026,7 @@ ${lines}
             method: 'POST',
             headers: { 'authorization': `Bearer ${RESEND_KEY}`, 'content-type': 'application/json' },
             body: JSON.stringify({
-                from: 'Shopify Change Intelligence <alerts@mail.contentforge.press>',
+                from: 'Shopify Change Intelligence <alerts@mail.pixharvest.com>',
                 to: [to],
                 subject: `🛒 ${total} competitor change(s) on Shopify`,
                 html,
@@ -2219,6 +2244,7 @@ async function handle(request, env) {
         }
         if (pathname === '/health') return json({ ok: true, time: new Date().toISOString() });
         if (pathname === '/.well-known/x402') return renderWellKnown();
+        if (pathname === '/.well-known/agent.json') return renderAgentMeta(new URL(request.url).origin);
         if (pathname === '/.well-known/glama.json') return renderGlama();
         if (pathname === '/privacy') return renderPrivacy();
         if (pathname === '/terms') return renderTerms();
