@@ -5,7 +5,7 @@
   "description": "Ask any public Shopify store a question. Free live snapshot; paid change intelligence (new/removed products, price moves, stock) and competitor reports. AI agents pay in USDC on Base via x402.",
   "category": "productivity",
   "homepage": "https://github.com/contentforge-press/shopify-change-intelligence",
-  "cloudEndpoint": "https://shopify-intel.contentforge-press.workers.dev/mcp",
+  "cloudEndpoint": "https://s-shopify.pixharvest.com/mcp",
   "icon": "🛍️",
   "tags": [
     "shopify",
@@ -38,9 +38,14 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "store": { "type": "string", "description": "Shopify domain, e.g. allbirds.com" }
+          "store": {
+            "type": "string",
+            "description": "Shopify domain, e.g. allbirds.com"
+          }
         },
-        "required": ["store"]
+        "required": [
+          "store"
+        ]
       }
     },
     {
@@ -49,9 +54,14 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "store": { "type": "string", "description": "Shopify domain, e.g. allbirds.com" }
+          "store": {
+            "type": "string",
+            "description": "Shopify domain, e.g. allbirds.com"
+          }
         },
-        "required": ["store"]
+        "required": [
+          "store"
+        ]
       }
     },
     {
@@ -60,9 +70,14 @@
       "inputSchema": {
         "type": "object",
         "properties": {
-          "store": { "type": "string", "description": "Shopify domain, e.g. allbirds.com" }
+          "store": {
+            "type": "string",
+            "description": "Shopify domain, e.g. allbirds.com"
+          }
         },
-        "required": ["store"]
+        "required": [
+          "store"
+        ]
       }
     },
     {
@@ -73,11 +88,15 @@
         "properties": {
           "stores": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Shopify domains, e.g. [\"allbirds.com\",\"gymshark.com\"]"
           }
         },
-        "required": ["stores"]
+        "required": [
+          "stores"
+        ]
       }
     },
     {
@@ -88,12 +107,19 @@
         "properties": {
           "stores": {
             "type": "array",
-            "items": { "type": "string" },
+            "items": {
+              "type": "string"
+            },
             "description": "Competitor Shopify domains, up to 10"
           },
-          "anchor": { "type": "string", "description": "Your store domain to position against peers" }
+          "anchor": {
+            "type": "string",
+            "description": "Your store domain to position against peers"
+          }
         },
-        "required": ["stores"]
+        "required": [
+          "stores"
+        ]
       }
     }
   ]
