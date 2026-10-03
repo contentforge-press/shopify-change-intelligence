@@ -1187,6 +1187,18 @@ function renderGlama() {
     });
 }
 
+function renderMcpJson(origin) {
+    const base = origin;
+    return json({
+        servers: [{
+            name: 'Shopify Change Intelligence',
+            description: 'Shopify intelligence for autonomous AI agents. Free public snapshot of stores, products, prices and inventory; paid change detection, intel reports, batch scans and market landscape. Paid calls settle USDC on Base via x402 (P2P, 0% commission). One access key works across the whole change-intelligence family.',
+            url: `${base}/mcp`,
+            transport: 'streamable-http',
+        }],
+    });
+}
+
 function renderAgentMeta(origin) {
     const base = origin;
     return json({
@@ -2262,6 +2274,7 @@ async function handle(request, env) {
         if (pathname === '/.well-known/x402') return renderWellKnown();
         if (pathname === '/.well-known/agent.json') return renderAgentMeta(new URL(request.url).origin);
         if (pathname === '/.well-known/glama.json') return renderGlama();
+        if (pathname === '/.well-known/mcp.json') return renderMcpJson(new URL(request.url).origin);
         if (pathname === '/privacy') return renderPrivacy();
         if (pathname === '/terms') return renderTerms();
         if (pathname === '/contact') return renderContact();
