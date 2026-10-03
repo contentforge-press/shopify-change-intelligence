@@ -716,6 +716,7 @@ async function handleSnapshot(url, request, env) {
                 url: p.url,
             })),
             note: 'Free snapshot. Deep change history requires /v1/changes.',
+            upgrade: 'Full change report — $0.05 USDC (Base) via x402 — GET /v1/changes?store=' + store,
         });
     } catch (err) {
         return json({ error: err.message }, 502);
@@ -1587,16 +1588,23 @@ async function handleCli(url, request, env) {
     if (!payHdr) {
         const g = await gateCli(url, request, kv, skv, kind);
         if (!g.allow) {
-            return json({
-                error: g.reason,
-                upgrade: new URL(url).origin + '/pricing',
-                hobby: { id: 'hobby', price: 9, perks: 'unlimited CLI, no attribution' },
-                used: g.used, quota: g.quota,
-                valueDelivered: (g.wins || []).slice(-6),
-                message: g.reason === 'quota_exceeded'
-                    ? `You've used this ${g.used} times in 30 days. Hobby ($9/month) unlocks unlimited calls and removes attribution.`
-                    : 'Add ?key=<accessKey> or ?install=<id>.',
-            }, 402);
+            // 与 kernel 系四路一致：无 key → 402 + x402 挑战头（agent 可 settle USDC 后重试）
+            const priceUsd = kind === 'changes' ? PRICE_DEEP_USD
+                : kind === 'intel' ? PRICE_INTEL_USD
+                : kind === 'landscape' ? 5 : PRICE_PER_STORE_USD;
+            const desc = `Shopify ${kind} for ${url.searchParams.get('store') || url.searchParams.get('target') || ''}`;
+            const requirements = buildRequirements(url.href, priceUsd, desc);
+            const cfg = { NETWORK_V2: 'eip155:8453', FACILITATOR_V2: 'https://x402.stablecoin.xyz', USDC_BASE, PAY_TO };
+            const pr = paymentRequiredResponse({ resource: url.href, description: desc, priceUsd, cfg, v1Requirements: requirements });
+            const data = await pr.json();
+            data.upgrade = new URL(url).origin + '/pricing';
+            data.hobby = { id: 'hobby', price: 9, perks: 'unlimited CLI, no attribution' };
+            data.used = g.used; data.quota = g.quota;
+            data.valueDelivered = (g.wins || []).slice(-6);
+            data.message = g.reason === 'quota_exceeded'
+                ? `You've used this ${g.used} times in 30 days. Hobby ($9/month) unlocks unlimited calls and removes attribution.`
+                : 'Settle USDC on Base via x402 and retry, or add ?key=<accessKey>.';
+            return new Response(JSON.stringify(data), { status: 402, headers: pr.headers });
         }
     }
 
