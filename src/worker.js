@@ -1398,7 +1398,7 @@ a{color:#9db8ff}
 </style></head>
 <body><div class="wrap">
 <h1>Plans &amp; pricing</h1>
-<div class="sub">Start free with pay-per-result, or get continuous monitoring. Billed in <b>USDC on Base</b> — no card, no processor.</div>
+<div class="sub">Start free with pay-per-result, or get continuous monitoring. Billed in <b>USDC on Base</b> — no card needed, or <a href="https://pixharvest.com/pricing" style="color:#9db8ff">pay by card at pixharvest.com</a> (9/9/99/mo) · <a href="mailto:contentforge.press@outlook.com" style="color:#9db8ff">email us</a>.</div>
 <div class="grid">${cards}</div>
 <div class="foot" id="paybox">
   <h3 id="paytitle">Complete your subscription</h3>
